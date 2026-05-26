@@ -124,7 +124,15 @@ def _fetch_statements(ticker: str, fyear: int | None = None) -> dict | None:
         return None
     # Verbose endpoint wraps data: [{ticker, statements: {...}}]
     if isinstance(result, list) and len(result) > 0:
-        return result[0]
+        item = result[0]
+        logger.debug(
+            "SimFin raw keys for %s: %s  |  statements type: %s",
+            ticker,
+            list(item.keys()) if isinstance(item, dict) else type(item).__name__,
+            type(item.get("statements")).__name__ if isinstance(item, dict) else "?",
+        )
+        return item
+    logger.warning("Unexpected SimFin response shape for %s: %s", ticker, str(result)[:200])
     return None
 
 
@@ -166,16 +174,58 @@ def _find_field(rows: list[dict], *candidates: str) -> float | None:
 def _parse_fundamentals(raw: dict, current_price: float | None, graham_factor: float = 22.5) -> dict:
     """
     Parse raw SimFin verbose statements into a flat KPI dict.
-    """
-    statements = raw.get("statements", {})
 
-    # Each statement may have a list of periods; take the most recent FY
+    SimFin v3 may return ``statements`` as either:
+      - a dict  : {"BS": [period, ...], "PL": [...], ...}
+      - a list  : [{"type": "BS", "data": [...], ...}, ...]
+    Both formats are handled below.
+    """
+    statements_raw = raw.get("statements", {})
+    logger.debug(
+        "statements type=%s preview=%s",
+        type(statements_raw).__name__,
+        str(statements_raw)[:300],
+    )
+
+    # ── Normalise to dict[str, list[period]] ─────────────────────────────────
+    if isinstance(statements_raw, list):
+        # List format: [{type, (data|periods|rows), ...}, ...]
+        statements: dict = {}
+        for entry in statements_raw:
+            if not isinstance(entry, dict):
+                continue
+            # Identify statement type key
+            stmt_type = (
+                entry.get("type")
+                or entry.get("statement")
+                or entry.get("stmtType")
+                or ""
+            ).upper()
+            if not stmt_type:
+                continue
+            # Periods may live under several key names
+            periods = (
+                entry.get("periods")
+                or entry.get("data")
+                or entry.get("rows")
+                or []
+            )
+            # If the data is already a flat row list (not a list of periods),
+            # wrap it in a single period shell so _latest_rows works uniformly.
+            if periods and isinstance(periods[0], dict) and "value" in periods[0]:
+                periods = [{"data": periods}]
+            statements[stmt_type] = periods
+        logger.debug("Normalised statements keys: %s", list(statements.keys()))
+    else:
+        statements = statements_raw  # already a dict
+
+    # Each statement value is a list of periods; take the most recent FY
     def _latest_rows(key: str) -> list[dict]:
-        data = statements.get(key, [])
-        if isinstance(data, list) and data:
-            # Each entry is a period; take the last (most recent)
-            period = data[-1]
-            return period.get("data", [])
+        periods = statements.get(key, [])
+        if isinstance(periods, list) and periods:
+            period = periods[-1]  # most recent fiscal year
+            if isinstance(period, dict):
+                return period.get("data", [])
         return []
 
     bs   = _latest_rows("BS")
