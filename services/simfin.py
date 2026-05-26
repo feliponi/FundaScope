@@ -125,14 +125,14 @@ def _fetch_statements(ticker: str, fyear: int | None = None) -> dict | None:
     # Verbose endpoint wraps data: [{ticker, statements: {...}}]
     if isinstance(result, list) and len(result) > 0:
         item = result[0]
-        logger.debug(
+        logger.info(
             "SimFin raw keys for %s: %s  |  statements type: %s",
             ticker,
             list(item.keys()) if isinstance(item, dict) else type(item).__name__,
             type(item.get("statements")).__name__ if isinstance(item, dict) else "?",
         )
         return item
-    logger.warning("Unexpected SimFin response shape for %s: %s", ticker, str(result)[:200])
+    logger.warning("Unexpected SimFin response shape for %s: %s", ticker, str(result)[:300])
     return None
 
 
@@ -181,10 +181,11 @@ def _parse_fundamentals(raw: dict, current_price: float | None, graham_factor: f
     Both formats are handled below.
     """
     statements_raw = raw.get("statements", {})
-    logger.debug(
-        "statements type=%s preview=%s",
+    logger.info(
+        "[%s] statements type=%s  top-level keys/len=%s",
+        raw.get("ticker", "?"),
         type(statements_raw).__name__,
-        str(statements_raw)[:300],
+        list(statements_raw.keys()) if isinstance(statements_raw, dict) else len(statements_raw),
     )
 
     # ── Normalise to dict[str, list[period]] ─────────────────────────────────
@@ -194,7 +195,6 @@ def _parse_fundamentals(raw: dict, current_price: float | None, graham_factor: f
         for entry in statements_raw:
             if not isinstance(entry, dict):
                 continue
-            # Identify statement type key
             stmt_type = (
                 entry.get("type")
                 or entry.get("statement")
@@ -203,7 +203,6 @@ def _parse_fundamentals(raw: dict, current_price: float | None, graham_factor: f
             ).upper()
             if not stmt_type:
                 continue
-            # Periods may live under several key names
             periods = (
                 entry.get("periods")
                 or entry.get("data")
@@ -215,18 +214,35 @@ def _parse_fundamentals(raw: dict, current_price: float | None, graham_factor: f
             if periods and isinstance(periods[0], dict) and "value" in periods[0]:
                 periods = [{"data": periods}]
             statements[stmt_type] = periods
-        logger.debug("Normalised statements keys: %s", list(statements.keys()))
+        logger.info("Normalised statements keys: %s", list(statements.keys()))
     else:
         statements = statements_raw  # already a dict
 
     # Each statement value is a list of periods; take the most recent FY
     def _latest_rows(key: str) -> list[dict]:
-        periods = statements.get(key, [])
-        if isinstance(periods, list) and periods:
-            period = periods[-1]  # most recent fiscal year
-            if isinstance(period, dict):
-                return period.get("data", [])
-        return []
+        raw_val = statements.get(key)
+        if raw_val is None:
+            logger.info("Statement key %r not found. Available: %s", key, list(statements.keys()))
+            return []
+
+        # Could be a list of periods OR a single period dict
+        if isinstance(raw_val, dict):
+            rows = raw_val.get("data", [])
+        elif isinstance(raw_val, list):
+            if not raw_val:
+                return []
+            last = raw_val[-1]
+            rows = last.get("data", []) if isinstance(last, dict) else []
+        else:
+            return []
+
+        logger.info(
+            "Statement %s → %d rows  |  first UIDs: %s",
+            key,
+            len(rows),
+            [r.get("uid") for r in rows[:6]] if rows else [],
+        )
+        return rows
 
     bs   = _latest_rows("BS")
     derv = _latest_rows("DERIVED")
