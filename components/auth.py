@@ -60,8 +60,11 @@ def check_and_handle_auth() -> bool:
     Called once on each Streamlit rerun:
     1. Try to consume OAuth callback params from the URL.
     2. Return True if the user is (now) authenticated.
+
+    Note: on a successful callback, handle_auth_callback() calls st.rerun()
+    internally, so this function will not return True in the same run that
+    processes the callback — the rerun ensures a clean authenticated render.
     """
-    # Try to finish OAuth flow if there are token params in URL
     if not is_authenticated():
         handle_auth_callback()
 
