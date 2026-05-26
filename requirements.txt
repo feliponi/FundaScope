@@ -1,7 +1,7 @@
-streamlit==1.45.1
-supabase==2.15.2
-httpx==0.28.1
-pandas==2.2.3
-plotly==6.1.1
-python-dotenv==1.1.0
-numpy==2.2.5
+streamlit
+supabase
+httpx
+pandas
+plotly
+python-dotenv
+numpy
