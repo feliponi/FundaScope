@@ -146,130 +146,84 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
-def _extract_field(statement: list[dict] | None, field_name: str) -> float | None:
+def _get_stmt_row(raw: dict, stmt_type: str) -> dict:
     """
-    Extract a numeric value from a SimFin statement row list.
-    Each row is: {"uid": "...", "displayName": "...", "value": ...}
+    Extract the latest data row (flat dict) for a given statement type.
+
+    SimFin v3 verbose format:
+      statements: [
+        {"statement": "PL", "data": [{flat field dict}, ...], ...},
+        {"statement": "BS", ...},
+        ...
+      ]
+    Each entry in data[] is a flat dict with field names as keys
+    (e.g. {"Earnings Per Share, Diluted": 2.84, "Gross Profit Margin": 0.48, ...}).
+    We take the last entry (most recent period).
     """
-    if not statement:
-        return None
-    for row in statement:
-        name = (row.get("displayName") or row.get("uid") or "").lower().replace(" ", "_")
-        uid = (row.get("uid") or "").lower().replace(" ", "_").replace("-", "_")
-        if field_name.lower() in (name, uid):
-            return _safe_float(row.get("value"))
-    return None
+    for entry in raw.get("statements", []):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("statement", "").upper() == stmt_type.upper():
+            data = entry.get("data", [])
+            if data and isinstance(data, list):
+                return data[-1]  # most recent period
+    return {}
 
 
-def _find_field(rows: list[dict], *candidates: str) -> float | None:
-    """Try multiple field name candidates, returning the first match."""
-    for candidate in candidates:
-        val = _extract_field(rows, candidate)
-        if val is not None:
-            return val
+def _f(row: dict, *keys: str) -> float | None:
+    """Return the first non-None float value found among the given keys in row."""
+    for k in keys:
+        v = _safe_float(row.get(k))
+        if v is not None:
+            return v
     return None
 
 
 def _parse_fundamentals(raw: dict, current_price: float | None, graham_factor: float = 22.5) -> dict:
     """
-    Parse raw SimFin verbose statements into a flat KPI dict.
+    Parse a raw SimFin v3 verbose response into a flat KPI dict.
 
-    SimFin v3 may return ``statements`` as either:
-      - a dict  : {"BS": [period, ...], "PL": [...], ...}
-      - a list  : [{"type": "BS", "data": [...], ...}, ...]
-    Both formats are handled below.
+    The API returns statements as a list of {statement, data[], checks[]} objects.
+    Each data[] element is a flat dict keyed by field display name, e.g.:
+      {"Earnings Per Share, Diluted": 2.84, "Gross Profit Margin": 0.4816, ...}
     """
-    statements_raw = raw.get("statements", {})
-    logger.info(
-        "[%s] statements type=%s  top-level keys/len=%s",
-        raw.get("ticker", "?"),
-        type(statements_raw).__name__,
-        list(statements_raw.keys()) if isinstance(statements_raw, dict) else len(statements_raw),
-    )
+    ticker = raw.get("ticker", "?")
+    derv = _get_stmt_row(raw, "DERIVED")
+    bs   = _get_stmt_row(raw, "BS")
 
-    # ── Normalise to dict[str, list[period]] ─────────────────────────────────
-    if isinstance(statements_raw, list):
-        # List format: [{type, (data|periods|rows), ...}, ...]
-        statements: dict = {}
-        for entry in statements_raw:
-            if not isinstance(entry, dict):
-                continue
-            stmt_type = (
-                entry.get("type")
-                or entry.get("statement")
-                or entry.get("stmtType")
-                or ""
-            ).upper()
-            if not stmt_type:
-                continue
-            periods = (
-                entry.get("periods")
-                or entry.get("data")
-                or entry.get("rows")
-                or []
-            )
-            # If the data is already a flat row list (not a list of periods),
-            # wrap it in a single period shell so _latest_rows works uniformly.
-            if periods and isinstance(periods[0], dict) and "value" in periods[0]:
-                periods = [{"data": periods}]
-            statements[stmt_type] = periods
-        logger.info("Normalised statements keys: %s", list(statements.keys()))
+    if not derv:
+        logger.warning("[%s] DERIVED statement empty or missing", ticker)
     else:
-        statements = statements_raw  # already a dict
+        logger.info("[%s] DERIVED OK — sample: EPS=%.4f  ROE=%.4f  Piotroski=%.0f",
+                    ticker,
+                    derv.get("Earnings Per Share, Diluted") or 0,
+                    derv.get("Return on Equity") or 0,
+                    derv.get("Piotroski F-Score") or 0)
 
-    # Each statement value is a list of periods; take the most recent FY
-    def _latest_rows(key: str) -> list[dict]:
-        raw_val = statements.get(key)
-        if raw_val is None:
-            logger.info("Statement key %r not found. Available: %s", key, list(statements.keys()))
-            return []
+    # ── DERIVED fields ────────────────────────────────────────────────────────
+    eps          = _f(derv, "Earnings Per Share, Diluted", "Earnings Per Share, Basic")
+    bvps         = _f(derv, "Equity Per Share", "Book Value Per Share")
+    fcf_ps       = _f(derv, "Free Cash Flow Per Share")
+    div_ps       = _f(derv, "Dividends Per Share")
+    rev_ps       = _f(derv, "Sales Per Share", "Revenue Per Share")
+    roe          = _f(derv, "Return on Equity")
+    roa          = _f(derv, "Return on Assets")
+    roic         = _f(derv, "Return On Invested Capital")
+    gross_margin = _f(derv, "Gross Profit Margin")
+    ebit_margin  = _f(derv, "Operating Margin", "EBIT Margin")
+    net_margin   = _f(derv, "Net Profit Margin")
+    ev_ebitda    = _f(derv, "EV/EBITDA", "Enterprise Value over EBITDA")
+    dy           = _f(derv, "Dividend Yield")
+    net_debt_ebitda = _f(derv, "Net Debt / EBITDA")
+    current_ratio   = _f(derv, "Current Ratio")
+    piotroski    = _f(derv, "Piotroski F-Score")
+    fcf_to_ni    = _f(derv, "Free Cash Flow to Net Income")
+    payout_ratio = _f(derv, "Dividend Payout Ratio")
+    beta         = _f(derv, "Beta")
 
-        # Could be a list of periods OR a single period dict
-        if isinstance(raw_val, dict):
-            rows = raw_val.get("data", [])
-        elif isinstance(raw_val, list):
-            if not raw_val:
-                return []
-            last = raw_val[-1]
-            rows = last.get("data", []) if isinstance(last, dict) else []
-        else:
-            return []
-
-        logger.info(
-            "Statement %s → %d rows  |  first UIDs: %s",
-            key,
-            len(rows),
-            [r.get("uid") for r in rows[:6]] if rows else [],
-        )
-        return rows
-
-    bs   = _latest_rows("BS")
-    derv = _latest_rows("DERIVED")
-
-    # ── DERIVED fields (direct from SimFin) ──────────────────────────────────
-    eps          = _find_field(derv, "eps_diluted", "earnings_per_share_diluted")
-    bvps         = _find_field(derv, "book_value_per_share", "book_value_share")
-    fcf_ps       = _find_field(derv, "free_cash_flow_per_share", "fcf_per_share")
-    div_ps       = _find_field(derv, "dividends_per_share", "dividend_per_share")
-    rev_ps       = _find_field(derv, "revenue_per_share")
-    roe          = _find_field(derv, "return_on_equity", "roe")
-    roa          = _find_field(derv, "return_on_assets", "roa")
-    roic         = _find_field(derv, "return_on_invested_capital", "roic")
-    gross_margin = _find_field(derv, "gross_profit_margin", "gross_margin")
-    ebit_margin  = _find_field(derv, "ebit_margin", "operating_margin")
-    net_margin   = _find_field(derv, "net_profit_margin", "net_margin")
-    ev_ebitda    = _find_field(derv, "ev_ebitda", "enterprise_value_over_ebitda")
-    dy           = _find_field(derv, "dividend_yield", "dy")
-    net_debt_ebitda = _find_field(derv, "net_debt_ebitda", "net_debt_over_ebitda")
-    current_ratio   = _find_field(derv, "current_ratio")
-    piotroski    = _find_field(derv, "piotroski_f_score", "piotroski")
-    fcf_to_ni    = _find_field(derv, "fcf_to_net_income", "fcf_net_income_ratio")
-    payout_ratio = _find_field(derv, "dividend_payout_ratio", "payout_ratio")
-    beta         = _find_field(derv, "beta")
-
-    # ── Balance sheet fallbacks ───────────────────────────────────────────────
-    total_debt   = _find_field(bs, "total_debt", "long_term_debt_short_term_debt")
-    total_equity = _find_field(bs, "total_equity", "shareholders_equity", "common_equity")
+    # ── Balance sheet ─────────────────────────────────────────────────────────
+    total_debt   = _f(derv, "Total Debt") or _f(bs, "Long Term Debt")
+    total_equity = _f(bs, "Total Equity")
     debt_equity  = (
         (total_debt / total_equity)
         if (total_debt is not None and total_equity and total_equity != 0)
@@ -279,25 +233,23 @@ def _parse_fundamentals(raw: dict, current_price: float | None, graham_factor: f
     # ── Calculated KPIs ───────────────────────────────────────────────────────
     from utils.graham import graham_number as calc_graham, margin_of_safety as calc_mos
 
-    g_num = calc_graham(eps, bvps, factor=graham_factor)
-    mos   = calc_mos(g_num, current_price)
+    g_num    = calc_graham(eps, bvps, factor=graham_factor)
+    mos      = calc_mos(g_num, current_price)
+    pl_ratio = (current_price / eps)    if (current_price and eps    and eps    > 0) else None
+    pvpa     = (current_price / bvps)   if (current_price and bvps   and bvps   > 0) else None
+    pfcf     = (current_price / fcf_ps) if (current_price and fcf_ps and fcf_ps > 0) else None
 
-    pl_ratio  = (current_price / eps)   if (current_price and eps and eps > 0)       else None
-    pvpa      = (current_price / bvps)  if (current_price and bvps and bvps > 0)     else None
-    pfcf      = (current_price / fcf_ps) if (current_price and fcf_ps and fcf_ps > 0) else None
+    # ── Company metadata ──────────────────────────────────────────────────────
+    industry = raw.get("industry") or {}
+    sector   = (industry.get("sectorName") or raw.get("sector", "")) if isinstance(industry, dict) else raw.get("sector", "")
 
-    # ── Company metadata ─────────────────────────────────────────────────────
-    company_info = {
+    return {
         "ticker":  raw.get("ticker", ""),
         "name":    raw.get("name", ""),
-        "sector":  raw.get("sector", ""),
+        "sector":  sector,
         "country": raw.get("country", ""),
         "market":  raw.get("market", ""),
         "price":   current_price,
-    }
-
-    return {
-        **company_info,
         # Valuation
         "pl":               pl_ratio,
         "pvpa":             pvpa,
@@ -323,7 +275,7 @@ def _parse_fundamentals(raw: dict, current_price: float | None, graham_factor: f
         "bvps":             bvps,
         "fcf_per_share":    fcf_ps,
         "div_per_share":    div_ps,
-        "revenue_per_share":rev_ps,
+        "revenue_per_share": rev_ps,
         # Qualidade
         "fcf_to_ni":        fcf_to_ni,
         "payout_ratio":     payout_ratio,
