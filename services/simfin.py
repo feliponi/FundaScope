@@ -114,7 +114,6 @@ def _fetch_statements(ticker: str, fyear: int | None = None) -> dict | None:
     params: dict[str, Any] = {
         "ticker": ticker,
         "statements": "PL,BS,CF,DERIVED",
-        "period": "FY",
     }
     if fyear:
         params["fyear"] = fyear
