@@ -6,14 +6,28 @@ Usage:
   python update_market_data.py --mode <mode> [--ticker <TICKER>]
 
 Modes:
+  seed          Insert one or more tickers into the DB (comma-separated).
+                Must be run before init for new tickers.
+                Example: python update_market_data.py --mode seed --ticker AAPL,MSFT,PETR4.SA
+
+  init          Full fetch (profile + fundamentals + price) WHERE last_update IS NULL,
+                then set last_update = NOW() on success.
+                If --ticker is given and not yet in the DB it is auto-inserted first.
+
   prices        Update stock_prices for all tickers WHERE last_update IS NOT NULL
   fundamentals  Update stock_fundamentals for all tickers WHERE last_update IS NOT NULL
   all           Update prices + fundamentals WHERE last_update IS NOT NULL
-  init          Full fetch (profile + fundamentals + price) WHERE last_update IS NULL,
-                then set last_update = NOW() on success
 
 Options:
-  --ticker TICKER   Restrict to a single ticker (for testing)
+  --ticker TICKER[,TICKER,...]
+      seed mode  → comma-separated list of tickers to insert
+      other modes → restrict processing to a single ticker (for testing)
+
+Typical workflow for a fresh setup:
+  1. python update_market_data.py --mode seed --ticker AAPL,MSFT,PETR4.SA
+  2. python update_market_data.py --mode init
+  3. (daily)   python update_market_data.py --mode prices
+  4. (quarterly) python update_market_data.py --mode fundamentals
 """
 
 import argparse
@@ -93,14 +107,58 @@ def safe_int(val: Any) -> Optional[int]:
 def get_tickers(mode: str, single_ticker: Optional[str]) -> list[str]:
     """Fetch ticker list from Supabase based on mode."""
     if single_ticker:
-        return [single_ticker.upper()]
+        tkr = single_ticker.strip().upper()
+        # For init, auto-insert the ticker if it doesn't exist yet
+        if mode == "init":
+            try:
+                supabase.table("tickers").insert(
+                    {"ticker": tkr, "last_update": None}
+                ).execute()
+                log.info("Auto-inserted ticker %s into tickers table", tkr)
+            except Exception:
+                pass  # already exists — that's fine
+        return [tkr]
 
     if mode == "init":
         res = supabase.table("tickers").select("ticker").is_("last_update", "null").execute()
     else:
         res = supabase.table("tickers").select("ticker").not_.is_("last_update", "null").execute()
 
+    log.debug("get_tickers raw response: %s", res.data)
     return [r["ticker"] for r in (res.data or [])]
+
+
+def seed_tickers(ticker_arg: Optional[str]) -> None:
+    """Insert tickers (comma-separated) with last_update=NULL so init can pick them up."""
+    if not ticker_arg:
+        log.error("--ticker is required for seed mode. Example: --ticker AAPL,MSFT,PETR4.SA")
+        sys.exit(1)
+
+    tickers_to_seed = [t.strip().upper() for t in ticker_arg.split(",") if t.strip()]
+    if not tickers_to_seed:
+        log.error("No valid tickers found in --ticker argument.")
+        sys.exit(1)
+
+    inserted: list[str] = []
+    skipped: list[str] = []
+
+    for tkr in tickers_to_seed:
+        try:
+            supabase.table("tickers").insert({"ticker": tkr, "last_update": None}).execute()
+            inserted.append(tkr)
+            log.info("Inserted: %s", tkr)
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "duplicate" in msg or "23505" in msg or "unique" in msg:
+                log.info("Already exists (skipped): %s", tkr)
+                skipped.append(tkr)
+            else:
+                log.error("Failed to insert %s: %s", tkr, exc)
+                skipped.append(tkr)
+
+    log.info("=== Seed done | inserted=%d skipped=%d ===", len(inserted), len(skipped))
+    if inserted:
+        log.info("Next step: python update_market_data.py --mode init")
 
 
 def retry_call(fn, *args, ticker: str = "", **kwargs) -> Any:
@@ -389,14 +447,25 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         required=True,
-        choices=["prices", "fundamentals", "all", "init"],
+        choices=["seed", "init", "prices", "fundamentals", "all"],
         help="Update mode",
     )
-    parser.add_argument("--ticker", default=None, help="Restrict to a single ticker")
+    parser.add_argument(
+        "--ticker",
+        default=None,
+        help=(
+            "seed mode: comma-separated list of tickers to insert (e.g. AAPL,MSFT,PETR4.SA). "
+            "Other modes: single ticker to restrict processing (for testing)."
+        ),
+    )
     args = parser.parse_args()
 
     mode: str = args.mode
     single_ticker: Optional[str] = args.ticker
+
+    if mode == "seed":
+        seed_tickers(single_ticker)
+        return
 
     log.info("=== FundaScope update started | mode=%s ticker=%s ===", mode, single_ticker or "all")
     start_ts = time.time()
