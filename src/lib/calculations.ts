@@ -80,6 +80,11 @@ export function calcIntrinsicValue(
  * Graham fair value (with 5-year earnings growth):
  * fairValue = eps × (8.5 + 2 × (g × 100))
  * g is a decimal (e.g. 0.12 for 12%).
+ *
+ * Graham's formula assumes a sustainable long-term growth rate. To prevent
+ * absurd valuations for high-growth tech stocks (e.g. g=1.03 → multiplier 214),
+ * g is capped at 25% (0.25) — the upper bound of what Graham considered credible.
+ * The stored earnings_growth_5y preserves the real historical value.
  */
 export function calcFairValue(
   eps: number | null | undefined,
@@ -87,7 +92,8 @@ export function calcFairValue(
 ): number | null {
   if (!isValid(eps, earningsGrowth5y)) return null
   if (eps! <= 0) return null
-  const gPct = earningsGrowth5y! * 100
+  const gCapped = Math.min(earningsGrowth5y!, 0.25)
+  const gPct = gCapped * 100
   return eps! * (8.5 + 2 * gPct)
 }
 

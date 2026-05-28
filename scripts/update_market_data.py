@@ -90,6 +90,10 @@ def now_utc() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def today_utc() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
 def safe_float(val: Any) -> Optional[float]:
     if val is None:
         return None
@@ -130,12 +134,7 @@ def get_tickers(mode: str, single_ticker: Optional[str]) -> list[str]:
 
 
 def seed_tickers(ticker_arg: Optional[str], csv_path: Optional[str]) -> None:
-    """Insert tickers with last_update=NULL so init can pick them up.
-
-    Sources (at least one required):
-      ticker_arg  – comma-separated string, e.g. "AAPL,MSFT,PETR4.SA"
-      csv_path    – path to a CSV file with a 'ticker' header column
-    """
+    """Insert tickers with last_update=NULL so init can pick them up."""
     tickers_to_seed: list[str] = []
 
     if csv_path:
@@ -213,6 +212,135 @@ def retry_call(fn, *args, ticker: str = "", **kwargs) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Price alert checking  (Feature 1)
+# ---------------------------------------------------------------------------
+
+def check_and_trigger_alerts(ticker_prices: dict[str, float]) -> None:
+    """Check price_alerts for each ticker and trigger any that crossed their threshold."""
+    if not ticker_prices:
+        return
+
+    tickers_list = list(ticker_prices.keys())
+
+    try:
+        res = (
+            supabase.table("price_alerts")
+            .select("id, user_id, ticker, target_price, direction")
+            .eq("is_active", True)
+            .in_("ticker", tickers_list)
+            .execute()
+        )
+        alerts = res.data or []
+        if not alerts:
+            return
+
+        triggered_inserts: list[dict] = []
+        alert_ids_to_deactivate: list[str] = []
+
+        for alert in alerts:
+            ticker = alert["ticker"]
+            new_price = ticker_prices.get(ticker)
+            if new_price is None:
+                continue
+
+            target = float(alert["target_price"])
+            direction = alert["direction"]
+
+            triggered = (
+                (direction == "above" and new_price >= target) or
+                (direction == "below" and new_price <= target)
+            )
+            if not triggered:
+                continue
+
+            triggered_inserts.append({
+                "user_id": alert["user_id"],
+                "ticker": ticker,
+                "target_price": target,
+                "triggered_price": new_price,
+                "direction": direction,
+                "triggered_at": now_utc(),
+            })
+            alert_ids_to_deactivate.append(alert["id"])
+            log.info(
+                "ALERT TRIGGERED: %s | user=%s | target=%s | actual=%.4f | direction=%s",
+                ticker, alert["user_id"], target, new_price, direction,
+            )
+
+        if triggered_inserts:
+            supabase.table("alerts_triggered").insert(triggered_inserts).execute()
+
+        for alert_id in alert_ids_to_deactivate:
+            supabase.table("price_alerts").update({"is_active": False}).eq("id", alert_id).execute()
+
+    except Exception as exc:
+        log.error("Alert checking failed: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Portfolio snapshots  (Feature 3)
+# ---------------------------------------------------------------------------
+
+def take_portfolio_snapshots() -> None:
+    """Snapshot every user's total portfolio value and cost for today."""
+    today = today_utc()
+
+    try:
+        port_res = supabase.table("portfolios").select("user_id, ticker, quantity, avg_price").execute()
+        portfolios = port_res.data or []
+
+        if not portfolios:
+            log.info("SNAPSHOT: no portfolios found, skipping")
+            return
+
+        tickers_needed = list({p["ticker"] for p in portfolios})
+        price_res = (
+            supabase.table("stock_prices")
+            .select("ticker, price")
+            .in_("ticker", tickers_needed)
+            .execute()
+        )
+        price_map: dict[str, float] = {
+            r["ticker"]: float(r["price"])
+            for r in (price_res.data or [])
+            if r["price"] is not None
+        }
+
+        user_totals: dict[str, dict[str, float]] = {}
+        for p in portfolios:
+            uid = p["user_id"]
+            ticker = p["ticker"]
+            qty = float(p["quantity"])
+            avg = float(p["avg_price"])
+
+            if ticker not in price_map:
+                log.warning("SNAPSHOT: no price for %s (user=%s), skipping position", ticker, uid)
+                continue
+
+            cur_price = price_map[ticker]
+            if uid not in user_totals:
+                user_totals[uid] = {"total_value": 0.0, "total_cost": 0.0}
+            user_totals[uid]["total_value"] += qty * cur_price
+            user_totals[uid]["total_cost"] += qty * avg
+
+        for uid, totals in user_totals.items():
+            supabase.table("portfolio_snapshots").upsert(
+                {
+                    "user_id": uid,
+                    "total_value": totals["total_value"],
+                    "total_cost": totals["total_cost"],
+                    "snapshot_date": today,
+                },
+                on_conflict="user_id,snapshot_date",
+            ).execute()
+
+        log.info("SNAPSHOT: %d portfolio snapshots saved for %s", len(user_totals), today)
+
+    except Exception as exc:
+        log.error("Portfolio snapshot failed: %s", exc)
+
+
+# ---------------------------------------------------------------------------
 # Price updates
 # ---------------------------------------------------------------------------
 
@@ -270,6 +398,11 @@ def update_prices(tickers: list[str]) -> list[str]:
             try:
                 supabase.table("stock_prices").upsert(rows, on_conflict="ticker").execute()
                 log.info("Upserted prices for %d tickers", len(rows))
+
+                # Check price alerts for every ticker whose price was just updated
+                ticker_price_map = {r["ticker"]: r["price"] for r in rows}
+                check_and_trigger_alerts(ticker_price_map)
+
             except Exception as exc:
                 log.error("Supabase write failed for prices batch: %s", exc)
                 failed.extend([r["ticker"] for r in rows])
@@ -317,11 +450,12 @@ def calc_earnings_growth_5y(ticker_obj: yf.Ticker) -> Optional[float]:
 
         cagr = (end / start) ** (1 / n_periods) - 1
 
-        # Sanity cap: CAGR > 100 % p.a. is almost certainly bad data
+        # Log unusually high values for visibility, but store them — the frontend
+        # Graham formula caps g at 25% internally to prevent absurd fair-value outputs.
+        # High-growth tech stocks (TTD, CRM, etc.) can have real CAGRs above 100%.
         if cagr > 1.0:
-            log.warning("Implausibly high earnings CAGR (%.1f%%) for %s — discarding",
-                        cagr * 100, getattr(ticker_obj, "ticker", "?"))
-            return None
+            log.info("High earnings CAGR (%.1f%%) for %s — storing as-is",
+                     cagr * 100, getattr(ticker_obj, "ticker", "?"))
 
         return cagr
     except Exception as exc:
@@ -537,6 +671,7 @@ def main() -> None:
     if mode == "prices":
         failed = update_prices(tickers)
         all_failed = retry_failed(failed, update_prices) if failed else []
+        take_portfolio_snapshots()
 
     elif mode == "fundamentals":
         failed = update_fundamentals_and_profiles(tickers, include_profile=False)
@@ -547,6 +682,7 @@ def main() -> None:
         failed_f = update_fundamentals_and_profiles(tickers, include_profile=False)
         combined_failed = list(set(failed_p) | set(failed_f))
         all_failed = retry_failed(combined_failed, lambda t: list(set(update_prices(t)) | set(update_fundamentals_and_profiles(t, include_profile=False)))) if combined_failed else []
+        take_portfolio_snapshots()
 
     elif mode == "init":
         failed_f = update_fundamentals_and_profiles(tickers, include_profile=True)
@@ -571,6 +707,8 @@ def main() -> None:
             all_failed = list(set(rf) | set(rp))
         else:
             all_failed = []
+
+        take_portfolio_snapshots()
 
     elapsed = time.time() - start_ts
     log.info(

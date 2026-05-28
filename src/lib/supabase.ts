@@ -97,6 +97,61 @@ export type Database = {
           updated_at?: string
         }
       }
+      price_alerts: {
+        Row: {
+          id: string
+          user_id: string
+          ticker: string
+          target_price: number
+          direction: 'above' | 'below'
+          is_active: boolean
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id?: string
+          ticker: string
+          target_price: number
+          direction: 'above' | 'below'
+          is_active?: boolean
+        }
+      }
+      alerts_triggered: {
+        Row: {
+          id: string
+          user_id: string
+          ticker: string
+          target_price: number
+          triggered_price: number
+          direction: string
+          triggered_at: string
+        }
+      }
+      ticker_notes: {
+        Row: {
+          id: string
+          user_id: string
+          ticker: string
+          content: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          user_id?: string
+          ticker: string
+          content: string
+          updated_at?: string
+        }
+      }
+      portfolio_snapshots: {
+        Row: {
+          id: string
+          user_id: string
+          total_value: number
+          total_cost: number
+          snapshot_date: string
+        }
+      }
     }
   }
 }

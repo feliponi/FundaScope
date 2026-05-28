@@ -11,6 +11,16 @@ import {
   fmtPct,
 } from '@/lib/calculations'
 import { useCurrency } from '@/lib/currency'
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+} from 'recharts'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -50,6 +60,7 @@ export default function Portfolio() {
 
   const [rows, setRows] = useState<PortfolioRow[]>([])
   const [tickers, setTickers] = useState<TickerOption[]>([])
+  const [snapshots, setSnapshots] = useState<{ snapshot_date: string; total_value: number; total_cost: number }[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -82,12 +93,17 @@ export default function Portfolio() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setError('Não autenticado.'); setLoading(false); return }
 
-    const [portfolioRes, pricesRes, fundRes, profilesRes, tickersRes] = await Promise.all([
+    const [portfolioRes, pricesRes, fundRes, profilesRes, tickersRes, snapshotRes] = await Promise.all([
       supabase.from('portfolios').select('*').eq('user_id', user.id),
       supabase.from('stock_prices').select('ticker, price'),
       supabase.from('stock_fundamentals').select('ticker, dividend_yield'),
       supabase.from('stock_profiles').select('ticker, company_name, currency'),
       supabase.from('tickers').select('ticker'),
+      supabase.from('portfolio_snapshots')
+        .select('snapshot_date, total_value, total_cost')
+        .eq('user_id', user.id)
+        .order('snapshot_date', { ascending: true })
+        .limit(365),
     ])
 
     if (portfolioRes.error) { setError(portfolioRes.error.message); setLoading(false); return }
@@ -104,6 +120,7 @@ export default function Portfolio() {
       dividend_yield: fundMap.get(p.ticker) ?? null,
     }))
     setRows(enriched)
+    setSnapshots(snapshotRes.data ?? [])
 
     const heldTickers = new Set(enriched.map((r) => r.ticker))
     const allTickers = (tickersRes.data ?? []).map((t) => ({
@@ -275,6 +292,69 @@ export default function Portfolio() {
           </Card>
         ))}
       </div>
+
+      {/* Equity Curve */}
+      {snapshots.length < 2 ? (
+        <Card>
+          <CardContent className="px-6 py-8 text-center text-sm text-muted-foreground">
+            A curva de patrimônio aparecerá após 2 ou mais atualizações de preços.
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Evolução do Portfólio</CardTitle>
+          </CardHeader>
+          <CardContent className="px-2 pb-4">
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={snapshots} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis
+                  dataKey="snapshot_date"
+                  tickFormatter={(d: string) => {
+                    const dt = new Date(d + 'T12:00:00')
+                    return dt.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
+                  }}
+                  tick={{ fontSize: 11 }}
+                  tickLine={false}
+                />
+                <YAxis
+                  tickFormatter={(v: number) => fmt(v, currency)}
+                  tick={{ fontSize: 11 }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={90}
+                />
+                <Tooltip
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  formatter={(value: any, name: any) => [fmt(value as number, currency), name as string]}
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  labelFormatter={(label: any) => new Date(String(label) + 'T12:00:00').toLocaleDateString('pt-BR')}
+                  contentStyle={{ fontSize: 12 }}
+                />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Line
+                  type="monotone"
+                  dataKey="total_value"
+                  name="Valor Atual"
+                  stroke="#22c55e"
+                  strokeWidth={2}
+                  dot={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="total_cost"
+                  name="Custo"
+                  stroke="#94a3b8"
+                  strokeWidth={2}
+                  dot={false}
+                  strokeDasharray="4 4"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Portfolio Table */}
       <div className="rounded-lg border overflow-auto">

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, NavLink, useNavigate } from 'react-router-dom'
 import { supabase, supabaseReady } from '@/lib/supabase'
 import type { Session } from '@supabase/supabase-js'
@@ -6,7 +6,7 @@ import Login from '@/pages/Login'
 import Screener from '@/pages/Screener'
 import Portfolio from '@/pages/Portfolio'
 import Analysis from '@/pages/Analysis'
-import { TrendingUp, BarChart2, Briefcase, LogOut } from 'lucide-react'
+import { TrendingUp, BarChart2, Briefcase, LogOut, Bell, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { CurrencyProvider, useCurrency, type DisplayCurrency } from '@/lib/currency'
 
@@ -35,7 +35,55 @@ function CurrencySelector() {
   )
 }
 
-function Layout({ children }: { children: React.ReactNode }) {
+type TriggeredAlert = { id: string; ticker: string; triggered_at: string }
+
+function AlertsBanner({ userId }: { userId: string }) {
+  const navigate = useNavigate()
+  const [alerts, setAlerts] = useState<TriggeredAlert[]>([])
+  const [dismissed, setDismissed] = useState(false)
+
+  const fetchAlerts = useCallback(async () => {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+    const { data } = await supabase
+      .from('alerts_triggered')
+      .select('id, ticker, triggered_at')
+      .eq('user_id', userId)
+      .gte('triggered_at', sevenDaysAgo)
+      .order('triggered_at', { ascending: false })
+    setAlerts(data ?? [])
+  }, [userId])
+
+  useEffect(() => { fetchAlerts() }, [fetchAlerts])
+
+  async function handleDismiss() {
+    await supabase.from('alerts_triggered').delete().eq('user_id', userId)
+    setDismissed(true)
+  }
+
+  if (dismissed || alerts.length === 0) return null
+
+  const firstTicker = alerts[0].ticker
+
+  return (
+    <div className="bg-amber-50 border-b border-amber-200">
+      <div className="max-w-screen-xl mx-auto px-4 py-2 flex items-center justify-between gap-4">
+        <button
+          className="flex items-center gap-2 text-sm text-amber-800 hover:text-amber-900 font-medium flex-1 text-left"
+          onClick={() => navigate(`/analysis/${firstTicker}`)}
+        >
+          <Bell className="h-4 w-4 shrink-0" />
+          {alerts.length} alerta{alerts.length > 1 ? 's' : ''} de preço atingido{alerts.length > 1 ? 's' : ''}.
+          Clique para ver em {firstTicker}.
+        </button>
+        <Button variant="ghost" size="icon" className="h-6 w-6 text-amber-700 hover:text-amber-900 hover:bg-amber-100" onClick={handleDismiss}>
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function Layout({ children, session }: { children: React.ReactNode; session: Session | null }) {
   const navigate = useNavigate()
 
   async function handleLogout() {
@@ -79,6 +127,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </header>
+      {session?.user?.id && <AlertsBanner userId={session.user.id} />}
       <main className="flex-1 max-w-screen-xl mx-auto w-full px-4 py-6">
         {children}
       </main>
@@ -99,7 +148,7 @@ function AppRoutes({ session }: { session: Session | null }) {
         path="/screener"
         element={
           <AuthGuard session={session}>
-            <Layout><Screener /></Layout>
+            <Layout session={session}><Screener /></Layout>
           </AuthGuard>
         }
       />
@@ -107,7 +156,7 @@ function AppRoutes({ session }: { session: Session | null }) {
         path="/portfolio"
         element={
           <AuthGuard session={session}>
-            <Layout><Portfolio /></Layout>
+            <Layout session={session}><Portfolio /></Layout>
           </AuthGuard>
         }
       />
@@ -115,7 +164,7 @@ function AppRoutes({ session }: { session: Session | null }) {
         path="/analysis/:ticker"
         element={
           <AuthGuard session={session}>
-            <Layout><Analysis /></Layout>
+            <Layout session={session}><Analysis /></Layout>
           </AuthGuard>
         }
       />
