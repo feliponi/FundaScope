@@ -8,6 +8,32 @@ import Portfolio from '@/pages/Portfolio'
 import Analysis from '@/pages/Analysis'
 import { TrendingUp, BarChart2, Briefcase, LogOut } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { CurrencyProvider, useCurrency, type DisplayCurrency } from '@/lib/currency'
+
+const CURRENCIES: DisplayCurrency[] = ['BRL', 'USD', 'EUR']
+
+function CurrencySelector() {
+  const { currency, setCurrency, ratesLoading, ratesError } = useCurrency()
+  return (
+    <div className="flex items-center gap-1">
+      {CURRENCIES.map((c) => (
+        <button
+          key={c}
+          onClick={() => setCurrency(c)}
+          title={ratesError ?? undefined}
+          className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
+            currency === c
+              ? 'bg-primary text-primary-foreground'
+              : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+          }`}
+        >
+          {c}
+        </button>
+      ))}
+      {ratesLoading && <span className="text-xs text-muted-foreground ml-1">…</span>}
+    </div>
+  )
+}
 
 function Layout({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate()
@@ -44,10 +70,13 @@ function Layout({ children }: { children: React.ReactNode }) {
               </NavLink>
             </nav>
           </div>
-          <Button variant="ghost" size="sm" onClick={handleLogout}>
-            <LogOut className="h-4 w-4 mr-1" />
-            Sair
-          </Button>
+          <div className="flex items-center gap-2">
+            <CurrencySelector />
+            <Button variant="ghost" size="sm" onClick={handleLogout}>
+              <LogOut className="h-4 w-4 mr-1" />
+              Sair
+            </Button>
+          </div>
         </div>
       </header>
       <main className="flex-1 max-w-screen-xl mx-auto w-full px-4 py-6">
@@ -147,7 +176,9 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <AppRoutes session={session} />
+      <CurrencyProvider>
+        <AppRoutes session={session} />
+      </CurrencyProvider>
     </BrowserRouter>
   )
 }

@@ -8,10 +8,9 @@ import {
   calcPlPct,
   calcAnnualDiv,
   calcWeight,
-  fmtCurrency,
   fmtPct,
-  fmtNumber,
 } from '@/lib/calculations'
+import { useCurrency } from '@/lib/currency'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -47,6 +46,8 @@ type PortfolioRow = {
 type TickerOption = { ticker: string; company_name: string | null }
 
 export default function Portfolio() {
+  const { fmt, convert, currency } = useCurrency()
+
   const [rows, setRows] = useState<PortfolioRow[]>([])
   const [tickers, setTickers] = useState<TickerOption[]>([])
   const [loading, setLoading] = useState(true)
@@ -135,14 +136,14 @@ export default function Portfolio() {
   }, [rows])
 
   const summary = useMemo(() => {
-    const totalInvested = enrichedRows.reduce((s, r) => s + (r.cost_basis ?? 0), 0)
-    const totalValue = enrichedRows.reduce((s, r) => s + (r.current_value ?? 0), 0)
+    const totalInvested = enrichedRows.reduce((s, r) => s + convert(r.cost_basis ?? 0, r.currency ?? 'USD'), 0)
+    const totalValue = enrichedRows.reduce((s, r) => s + convert(r.current_value ?? 0, r.currency ?? 'USD'), 0)
     const totalPl = totalValue - totalInvested
     const totalPlPct = totalInvested > 0 ? totalPl / totalInvested : null
-    const totalDiv = enrichedRows.reduce((s, r) => s + (r.annual_div ?? 0), 0)
+    const totalDiv = enrichedRows.reduce((s, r) => s + convert(r.annual_div ?? 0, r.currency ?? 'USD'), 0)
     const portfolioYield = totalValue > 0 ? totalDiv / totalValue : null
     return { totalInvested, totalValue, totalPl, totalPlPct, totalDiv, portfolioYield }
-  }, [enrichedRows])
+  }, [enrichedRows, convert, currency])
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault()
@@ -249,11 +250,11 @@ export default function Portfolio() {
       {/* Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {[
-          { label: 'Total Investido *', value: summary.totalInvested.toLocaleString('pt-BR', { maximumFractionDigits: 2 }) },
-          { label: 'Valor Atual *', value: summary.totalValue.toLocaleString('pt-BR', { maximumFractionDigits: 2 }) },
+          { label: 'Total Investido', value: fmt(summary.totalInvested, currency) },
+          { label: 'Valor Atual', value: fmt(summary.totalValue, currency) },
           {
-            label: 'P&L *',
-            value: summary.totalPl.toLocaleString('pt-BR', { maximumFractionDigits: 2, signDisplay: 'exceptZero' }),
+            label: 'P&L',
+            value: fmt(summary.totalPl, currency),
             color: summary.totalPl >= 0 ? 'text-green-600' : 'text-red-600',
           },
           {
@@ -261,7 +262,7 @@ export default function Portfolio() {
             value: fmtPct(summary.totalPlPct),
             color: (summary.totalPlPct ?? 0) >= 0 ? 'text-green-600' : 'text-red-600',
           },
-          { label: 'Div. Anuais Est. *', value: summary.totalDiv.toLocaleString('pt-BR', { maximumFractionDigits: 2 }) },
+          { label: 'Div. Anuais Est.', value: fmt(summary.totalDiv, currency) },
           { label: 'Yield do Portfólio', value: fmtPct(summary.portfolioYield) },
         ].map((c) => (
           <Card key={c.label}>
@@ -274,9 +275,6 @@ export default function Portfolio() {
           </Card>
         ))}
       </div>
-      <p className="text-xs text-muted-foreground -mt-2">
-        * Totais somados na moeda original de cada ativo (sem conversão cambial).
-      </p>
 
       {/* Portfolio Table */}
       <div className="rounded-lg border overflow-auto">
@@ -296,21 +294,21 @@ export default function Portfolio() {
                 </td>
                 <td className="px-3 py-2 text-muted-foreground max-w-[160px] truncate">{r.company_name ?? '-'}</td>
                 <td className="px-3 py-2">{r.quantity}</td>
-                <td className="px-3 py-2">{fmtCurrency(r.avg_price, r.currency)}</td>
-                <td className="px-3 py-2">{r.current_price != null ? fmtCurrency(r.current_price, r.currency) : '-'}</td>
-                <td className="px-3 py-2">{r.current_value != null ? fmtCurrency(r.current_value, r.currency) : '-'}</td>
-                <td className="px-3 py-2">{r.cost_basis != null ? fmtCurrency(r.cost_basis, r.currency) : '-'}</td>
+                <td className="px-3 py-2">{fmt(r.avg_price, r.currency)}</td>
+                <td className="px-3 py-2">{r.current_price != null ? fmt(r.current_price, r.currency) : '-'}</td>
+                <td className="px-3 py-2">{r.current_value != null ? fmt(r.current_value, r.currency) : '-'}</td>
+                <td className="px-3 py-2">{r.cost_basis != null ? fmt(r.cost_basis, r.currency) : '-'}</td>
                 <td className={`px-3 py-2 font-medium ${(r.pl_abs ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                   <span className="flex items-center gap-1">
                     {(r.pl_abs ?? 0) >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-                    {r.pl_abs != null ? fmtCurrency(r.pl_abs, r.currency) : '-'}
+                    {r.pl_abs != null ? fmt(r.pl_abs, r.currency) : '-'}
                   </span>
                 </td>
                 <td className={`px-3 py-2 font-medium ${(r.pl_pct ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                   {r.pl_pct != null ? fmtPct(r.pl_pct) : '-'}
                 </td>
                 <td className="px-3 py-2">{r.dividend_yield != null ? `${(r.dividend_yield * 100).toFixed(2)}%` : '-'}</td>
-                <td className="px-3 py-2">{r.annual_div != null ? fmtCurrency(r.annual_div, r.currency) : '-'}</td>
+                <td className="px-3 py-2">{r.annual_div != null ? fmt(r.annual_div, r.currency) : '-'}</td>
                 <td className="px-3 py-2">{r.weight != null ? `${(r.weight * 100).toFixed(1)}%` : '-'}</td>
                 <td className="px-3 py-2">
                   <div className="flex items-center gap-1">

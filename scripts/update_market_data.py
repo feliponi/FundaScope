@@ -420,8 +420,9 @@ def update_fundamentals_and_profiles(tickers: list[str], include_profile: bool =
             "debt_equity": safe_float(info.get("debtToEquity")),
             "current_ratio": safe_float(info.get("currentRatio")),
             "net_debt_ebit": net_debt_ebit,
-            # dividends
-            "dividend_yield": safe_float(info.get("dividendYield")),
+            # dividends — yfinance sometimes returns absurd values (e.g. 9.05 = 905%) for B3
+            # stocks; treat anything above 1.0 (100%) as bad data and discard it
+            "dividend_yield": (lambda v: v if v is not None and v <= 1.0 else None)(safe_float(info.get("dividendYield"))),
             "payout_avg": safe_float(info.get("payoutRatio")),
             # growth
             "earnings_growth_5y": growth_5y,
