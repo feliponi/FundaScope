@@ -217,7 +217,7 @@ export default function Screener() {
       intrinsic: calcIntrinsicValue(r.eps, r.book_value_per_share),
       fair: calcFairValue(r.eps, r.earnings_growth_5y),
       upside: calcIntrinsicUpside(calcIntrinsicValue(r.eps, r.book_value_per_share), r.price),
-      margin: calcMarginOfSafety(calcIntrinsicValue(r.eps, r.book_value_per_share), r.price),
+      margin: calcMarginOfSafety(calcFairValue(r.eps, r.earnings_growth_5y), r.price),
       dyPct: r.dividend_yield != null ? r.dividend_yield * 100 : null,
     }))
   }, [rows])
@@ -477,7 +477,7 @@ export default function Screener() {
                   const noData = !r.has_fundamentals
                   const dash = '-'
                   const marginColor = r.margin != null
-                    ? r.margin > 30 ? 'text-green-600' : r.margin >= 10 ? 'text-yellow-600' : 'text-red-600'
+                    ? r.margin > 0.30 ? 'text-green-600' : r.margin >= 0.10 ? 'text-yellow-600' : 'text-red-600'
                     : ''
                   return (
                     <tr key={r.ticker} className="hover:bg-muted/30 transition-colors">
@@ -498,7 +498,7 @@ export default function Screener() {
                       <td className="px-3 py-2">{noData ? dash : (r.fair != null ? fmt(r.fair, r.currency) : dash)}</td>
                       <td className="px-3 py-2">{noData ? dash : (r.payout_avg != null ? `${(r.payout_avg * 100).toFixed(1)}%` : dash)}</td>
                       <td className={`px-3 py-2 font-medium ${marginColor}`}>
-                        {noData ? dash : (r.margin != null ? `${r.margin.toFixed(1)}%` : dash)}
+                        {noData ? dash : (r.margin != null ? fmtPct(r.margin) : dash)}
                       </td>
                       <td className="px-3 py-2">{noData ? dash : fmtNumber(r.pb)}</td>
                       <td className="px-3 py-2">{r.dyPct != null ? `${r.dyPct.toFixed(2)}%` : dash}</td>
