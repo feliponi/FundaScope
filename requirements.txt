@@ -1,7 +1,0 @@
-streamlit
-supabase
-httpx
-pandas
-plotly
-python-dotenv
-numpy
