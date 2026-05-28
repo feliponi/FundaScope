@@ -34,6 +34,7 @@ type ScreenerRow = {
   ticker: string
   company_name: string | null
   sector: string | null
+  currency: string | null
   price: number | null
   dividend_yield: number | null
   eps: number | null
@@ -133,7 +134,7 @@ export default function Screener() {
 
     const { data: priceData } = await supabase.from('stock_prices').select('ticker, price')
     const { data: fundData } = await supabase.from('stock_fundamentals').select('*')
-    const { data: profileData } = await supabase.from('stock_profiles').select('ticker, company_name, sector')
+    const { data: profileData } = await supabase.from('stock_profiles').select('ticker, company_name, sector, currency')
 
     const priceMap = new Map((priceData ?? []).map((r) => [r.ticker, r.price]))
     const fundMap = new Map((fundData ?? []).map((r) => [r.ticker, r]))
@@ -146,6 +147,7 @@ export default function Screener() {
         ticker: t.ticker,
         company_name: p?.company_name ?? null,
         sector: p?.sector ?? null,
+        currency: p?.currency ?? null,
         price: priceMap.get(t.ticker) ?? null,
         dividend_yield: f?.dividend_yield ?? null,
         eps: f?.eps ?? null,
@@ -393,9 +395,9 @@ export default function Screener() {
                       </Link>
                     </td>
                     <td className="px-3 py-2 text-muted-foreground max-w-[180px] truncate">{r.company_name ?? '-'}</td>
-                    <td className="px-3 py-2">{r.price != null ? fmtCurrency(r.price) : '-'}</td>
-                    <td className="px-3 py-2">{r.has_fundamentals ? (r.teto8 != null ? fmtCurrency(r.teto8) : '-') : '-'}</td>
-                    <td className="px-3 py-2">{r.has_fundamentals ? (r.teto6 != null ? fmtCurrency(r.teto6) : '-') : '-'}</td>
+                    <td className="px-3 py-2">{r.price != null ? fmtCurrency(r.price, r.currency) : '-'}</td>
+                    <td className="px-3 py-2">{r.has_fundamentals ? (r.teto8 != null ? fmtCurrency(r.teto8, r.currency) : '-') : '-'}</td>
+                    <td className="px-3 py-2">{r.has_fundamentals ? (r.teto6 != null ? fmtCurrency(r.teto6, r.currency) : '-') : '-'}</td>
                     <td className="px-3 py-2">
                       {r.has_fundamentals && r.signal ? (
                         <Badge variant={r.signal === 'COMPRA' ? 'success' : 'danger'}>
@@ -457,9 +459,9 @@ export default function Screener() {
                           {r.ticker}
                         </Link>
                       </td>
-                      <td className="px-3 py-2">{r.price != null ? fmtCurrency(r.price) : dash}</td>
-                      <td className="px-3 py-2">{noData ? dash : (r.intrinsic != null ? fmtCurrency(r.intrinsic) : dash)}</td>
-                      <td className="px-3 py-2">{noData ? dash : (r.fair != null ? fmtCurrency(r.fair) : dash)}</td>
+                      <td className="px-3 py-2">{r.price != null ? fmtCurrency(r.price, r.currency) : dash}</td>
+                      <td className="px-3 py-2">{noData ? dash : (r.intrinsic != null ? fmtCurrency(r.intrinsic, r.currency) : dash)}</td>
+                      <td className="px-3 py-2">{noData ? dash : (r.fair != null ? fmtCurrency(r.fair, r.currency) : dash)}</td>
                       <td className="px-3 py-2">{noData ? dash : (r.payout_avg != null ? `${(r.payout_avg * 100).toFixed(1)}%` : dash)}</td>
                       <td className={`px-3 py-2 ${r.marketSafety != null && r.marketSafety > 0 ? 'text-green-600' : r.marketSafety != null ? 'text-red-600' : ''}`}>
                         {noData ? dash : (r.marketSafety != null ? fmtPct(r.marketSafety) : dash)}

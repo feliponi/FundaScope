@@ -6,9 +6,10 @@ Usage:
   python update_market_data.py --mode <mode> [--ticker <TICKER>]
 
 Modes:
-  seed          Insert one or more tickers into the DB (comma-separated).
+  seed          Insert one or more tickers into the DB.
                 Must be run before init for new tickers.
-                Example: python update_market_data.py --mode seed --ticker AAPL,MSFT,PETR4.SA
+                Example (comma-separated): python update_market_data.py --mode seed --ticker AAPL,MSFT,PETR4.SA
+                Example (CSV file):        python update_market_data.py --mode seed --csv tickers.csv
 
   init          Full fetch (profile + fundamentals + price) WHERE last_update IS NULL,
                 then set last_update = NOW() on success.
@@ -24,9 +25,9 @@ Options:
       other modes → restrict processing to a single ticker (for testing)
 
 Typical workflow for a fresh setup:
-  1. python update_market_data.py --mode seed --ticker AAPL,MSFT,PETR4.SA
+  1. python update_market_data.py --mode seed --csv tickers.csv
   2. python update_market_data.py --mode init
-  3. (daily)   python update_market_data.py --mode prices
+  3. (daily)     python update_market_data.py --mode prices
   4. (quarterly) python update_market_data.py --mode fundamentals
 """
 
@@ -128,16 +129,51 @@ def get_tickers(mode: str, single_ticker: Optional[str]) -> list[str]:
     return [r["ticker"] for r in (res.data or [])]
 
 
-def seed_tickers(ticker_arg: Optional[str]) -> None:
-    """Insert tickers (comma-separated) with last_update=NULL so init can pick them up."""
-    if not ticker_arg:
-        log.error("--ticker is required for seed mode. Example: --ticker AAPL,MSFT,PETR4.SA")
+def seed_tickers(ticker_arg: Optional[str], csv_path: Optional[str]) -> None:
+    """Insert tickers with last_update=NULL so init can pick them up.
+
+    Sources (at least one required):
+      ticker_arg  – comma-separated string, e.g. "AAPL,MSFT,PETR4.SA"
+      csv_path    – path to a CSV file with a 'ticker' header column
+    """
+    tickers_to_seed: list[str] = []
+
+    if csv_path:
+        import csv as csv_mod
+        try:
+            with open(csv_path, newline="", encoding="utf-8") as fh:
+                reader = csv_mod.DictReader(fh)
+                if "ticker" not in (reader.fieldnames or []):
+                    log.error("CSV file must have a 'ticker' column header.")
+                    sys.exit(1)
+                tickers_to_seed.extend(
+                    row["ticker"].strip().upper()
+                    for row in reader
+                    if row.get("ticker", "").strip()
+                )
+        except FileNotFoundError:
+            log.error("CSV file not found: %s", csv_path)
+            sys.exit(1)
+
+    if ticker_arg:
+        tickers_to_seed.extend(
+            t.strip().upper() for t in ticker_arg.split(",") if t.strip()
+        )
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique: list[str] = []
+    for t in tickers_to_seed:
+        if t not in seen:
+            seen.add(t)
+            unique.append(t)
+    tickers_to_seed = unique
+
+    if not tickers_to_seed:
+        log.error("No tickers to seed. Use --ticker AAPL,MSFT or --csv tickers.csv")
         sys.exit(1)
 
-    tickers_to_seed = [t.strip().upper() for t in ticker_arg.split(",") if t.strip()]
-    if not tickers_to_seed:
-        log.error("No valid tickers found in --ticker argument.")
-        sys.exit(1)
+    log.info("Seeding %d ticker(s)…", len(tickers_to_seed))
 
     inserted: list[str] = []
     skipped: list[str] = []
@@ -249,7 +285,11 @@ def update_prices(tickers: list[str]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def calc_earnings_growth_5y(ticker_obj: yf.Ticker) -> Optional[float]:
-    """Compute 5-year earnings CAGR from annual net income."""
+    """Compute 5-year earnings CAGR from annual net income.
+
+    Requires at least 3 annual data points (2 intervals) to avoid inflated
+    CAGR from a single-year jump (e.g. post-COVID earnings recovery).
+    """
     try:
         financials = ticker_obj.financials  # columns = dates, rows = line items
         if financials is None or financials.empty:
@@ -261,12 +301,12 @@ def calc_earnings_growth_5y(ticker_obj: yf.Ticker) -> Optional[float]:
                 ni_row = financials.loc[label].dropna()
                 break
 
-        if ni_row is None or len(ni_row) < 2:
+        if ni_row is None or len(ni_row) < 3:          # need ≥ 3 points → ≥ 2 intervals
             return None
 
         ni_sorted = ni_row.sort_index(ascending=True)
-        n_periods = min(len(ni_sorted) - 1, 4)  # up to 4 years = 5 data points
-        if n_periods < 1:
+        n_periods = min(len(ni_sorted) - 1, 4)         # up to 4 years = 5 data points
+        if n_periods < 2:                               # enforce minimum of 2 intervals
             return None
 
         start = float(ni_sorted.iloc[-(n_periods + 1)])
@@ -276,6 +316,13 @@ def calc_earnings_growth_5y(ticker_obj: yf.Ticker) -> Optional[float]:
             return None
 
         cagr = (end / start) ** (1 / n_periods) - 1
+
+        # Sanity cap: CAGR > 100 % p.a. is almost certainly bad data
+        if cagr > 1.0:
+            log.warning("Implausibly high earnings CAGR (%.1f%%) for %s — discarding",
+                        cagr * 100, getattr(ticker_obj, "ticker", "?"))
+            return None
+
         return cagr
     except Exception as exc:
         log.warning("Could not compute 5y earnings growth: %s", exc)
@@ -455,16 +502,23 @@ def main() -> None:
         default=None,
         help=(
             "seed mode: comma-separated list of tickers to insert (e.g. AAPL,MSFT,PETR4.SA). "
-            "Other modes: single ticker to restrict processing (for testing)."
+            "Other modes: single ticker to restrict processing to (for testing)."
         ),
+    )
+    parser.add_argument(
+        "--csv",
+        default=None,
+        metavar="FILE",
+        help="seed mode only: path to a CSV file with a 'ticker' column to bulk-insert.",
     )
     args = parser.parse_args()
 
     mode: str = args.mode
     single_ticker: Optional[str] = args.ticker
+    csv_file: Optional[str] = args.csv
 
     if mode == "seed":
-        seed_tickers(single_ticker)
+        seed_tickers(single_ticker, csv_file)
         return
 
     log.info("=== FundaScope update started | mode=%s ticker=%s ===", mode, single_ticker or "all")

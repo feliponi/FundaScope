@@ -44,13 +44,15 @@ cp .env.example .env
 
 Edit `.env` and fill in:
 
-| Variable | Where to find it |
-|---|---|
-| `SUPABASE_URL` | Supabase Dashboard → Settings → API → Project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase Dashboard → Settings → API → service_role secret key |
+| Variable | Used by | Where to find it |
+|---|---|---|
+| `SUPABASE_URL` | Frontend + admin script | Supabase Dashboard → Settings → API → **Project URL** |
+| `SUPABASE_ANON_KEY` | Frontend only | Supabase Dashboard → Settings → API → **anon / public** |
+| `SUPABASE_SERVICE_ROLE_KEY` | Admin script only | Supabase Dashboard → Settings → API → **service_role / secret** |
 
-Both variables are shared between the frontend (via Vite's `envPrefix`) and the admin Python script.
-Keep `.env` git-ignored and never commit it.
+> **Important:** `SUPABASE_ANON_KEY` and `SUPABASE_URL` are safe to expose in the browser bundle.
+> `SUPABASE_SERVICE_ROLE_KEY` bypasses Row Level Security — **never** use it in the frontend.
+> Keep `.env` git-ignored and never commit it.
 
 ### 3. Apply the database schema
 
