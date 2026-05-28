@@ -1,13 +1,13 @@
 import { createClient } from '@supabase/supabase-js'
 
 const supabaseUrl = import.meta.env.SUPABASE_URL as string
-const supabaseAnonKey = import.meta.env.SUPABASE_ANON_KEY as string
+const supabaseKey = import.meta.env.SUPABASE_SERVICE_ROLE_KEY as string
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error('Missing SUPABASE_URL or SUPABASE_ANON_KEY environment variables')
+if (!supabaseUrl || !supabaseKey) {
+  throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variables')
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+export const supabase = createClient(supabaseUrl, supabaseKey)
 
 export type Database = {
   public: {
