@@ -574,6 +574,12 @@ export default function Simulator() {
         </div>
       </div>
 
+      {/* Methodological disclaimer — static */}
+      <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900 leading-relaxed space-y-2">
+        <p className="font-semibold">⚠ Limitação Metodológica — Bazin e Graham</p>
+        <p>Os métodos Bazin (3/8) e Graham foram desenvolvidos para empresas tradicionais, intensivas em ativos e com dividendos consistentes. Eles tendem a subvalorizar sistematicamente empresas de tecnologia, alto crescimento e modelos asset-light (ex.: SAP, ASML, MSFT) — empresas que reinvestem lucros em vez de distribuir dividendos. Para esses perfis, complemente com a análise DCF, que captura a geração futura de caixa independentemente da política de dividendos.</p>
+      </div>
+
       {/* ------------------------------------------------------------------ */}
       {/* Ticker Selection Panel                                               */}
       {/* ------------------------------------------------------------------ */}

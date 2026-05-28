@@ -100,15 +100,6 @@ export function calcIntrinsicUpside(
   return (intrinsicValue / currentPrice) - 1;
 }
 
-export function calcFairValueUpside(
-  fairValue?: number | null,
-  currentPrice?: number | null
-): number | null {
-  if (typeof fairValue !== 'number' || typeof currentPrice !== 'number') return null;
-  if (currentPrice <= 0 || fairValue <= 0) return null;
-  return (fairValue / currentPrice) - 1;
-}
-
 export function calcSafetyColor(
   marginOfSafety?: number | null
 ): 'green' | 'yellow' | 'red' | null {

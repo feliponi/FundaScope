@@ -9,7 +9,6 @@ import {
   calcFairValue,
   calcMarginOfSafety,
   calcIntrinsicUpside,
-  calcFairValueUpside,
   fmtNumber,
   fmtPct,
 } from '@/lib/calculations'
@@ -28,7 +27,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { ChevronUp, ChevronDown, ChevronsUpDown, Plus, Filter, ChevronLeft, ChevronRight, StickyNote } from 'lucide-react'
+import { ChevronUp, ChevronDown, ChevronsUpDown, Plus, Filter, ChevronLeft, ChevronRight, StickyNote, Info } from 'lucide-react'
 
 type ScreenerRow = {
   ticker: string
@@ -70,6 +69,7 @@ function Th({
   sortDir,
   onSort,
   className = '',
+  tooltip,
 }: {
   col: string
   label: string
@@ -77,14 +77,28 @@ function Th({
   sortDir: SortDir
   onSort: (col: string) => void
   className?: string
+  tooltip?: string
 }) {
   return (
     <th
       className={`px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider cursor-pointer select-none whitespace-nowrap hover:text-foreground ${className}`}
       onClick={() => onSort(col)}
     >
-      {label}
-      <SortIcon col={col} sortKey={sortKey} sortDir={sortDir} />
+      <span className="inline-flex items-center">
+        {label}
+        <SortIcon col={col} sortKey={sortKey} sortDir={sortDir} />
+        {tooltip && (
+          <span
+            className="group relative inline-flex items-center ml-0.5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Info className="h-3 w-3 text-muted-foreground/60 cursor-help" />
+            <span className="pointer-events-none absolute z-50 top-full mt-1 left-0 w-[280px] rounded border bg-popover px-3 py-2 text-xs font-normal normal-case tracking-normal text-popover-foreground shadow-lg whitespace-normal leading-relaxed opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+              {tooltip}
+            </span>
+          </span>
+        )}
+      </span>
     </th>
   )
 }
@@ -203,7 +217,6 @@ export default function Screener() {
       intrinsic: calcIntrinsicValue(r.eps, r.book_value_per_share),
       fair: calcFairValue(r.eps, r.earnings_growth_5y),
       upside: calcIntrinsicUpside(calcIntrinsicValue(r.eps, r.book_value_per_share), r.price),
-      marketSafety: calcMarginOfSafety(calcFairValue(r.eps, r.earnings_growth_5y), r.price),
       margin: calcMarginOfSafety(calcIntrinsicValue(r.eps, r.book_value_per_share), r.price),
       dyPct: r.dividend_yield != null ? r.dividend_yield * 100 : null,
     }))
@@ -388,7 +401,7 @@ export default function Screener() {
                   <Th col="price" label="Preço" {...sp} />
                   <Th col="teto8" label="Teto 8%" {...sp} />
                   <Th col="teto6" label="Teto 6%" {...sp} />
-                  <Th col="signal" label="Sinal 3/8" {...sp} />
+                  <Th col="signal" label="Sinal 3/8" {...sp} tooltip="Os métodos Bazin e Graham foram desenvolvidos para empresas que pagam dividendos consistentes. Os resultados podem ser enganosos para empresas de tecnologia, crescimento ou intensivas em P&D com baixo ou nenhum dividendo." />
                   <Th col="upside" label="Upside" {...sp} />
                   <Th col="dyPct" label="DY%" {...sp} />
                   <Th col="sector" label="Setor" {...sp} />
@@ -445,8 +458,7 @@ export default function Screener() {
                   <Th col="intrinsic" label="V. Intrínseco" {...sp} />
                   <Th col="fair" label="V. Justo" {...sp} />
                   <Th col="payout_avg" label="Payout Médio" {...sp} />
-                  <Th col="marketSafety" label="Seg. Juros Merc." {...sp} />
-                  <Th col="margin" label="Margem Seg." {...sp} />
+                  <Th col="margin" label="Margem Seg." {...sp} tooltip="Os métodos Bazin e Graham foram desenvolvidos para empresas que pagam dividendos consistentes. Os resultados podem ser enganosos para empresas de tecnologia, crescimento ou intensivas em P&D com baixo ou nenhum dividendo." />
                   <Th col="pb" label="P/VPA" {...sp} />
                   <Th col="dyPct" label="DY%" {...sp} />
                   <Th col="pe" label="P/L" {...sp} />
@@ -485,9 +497,6 @@ export default function Screener() {
                       <td className="px-3 py-2">{noData ? dash : (r.intrinsic != null ? fmt(r.intrinsic, r.currency) : dash)}</td>
                       <td className="px-3 py-2">{noData ? dash : (r.fair != null ? fmt(r.fair, r.currency) : dash)}</td>
                       <td className="px-3 py-2">{noData ? dash : (r.payout_avg != null ? `${(r.payout_avg * 100).toFixed(1)}%` : dash)}</td>
-                      <td className={`px-3 py-2 ${r.marketSafety != null && r.marketSafety > 0 ? 'text-green-600' : r.marketSafety != null ? 'text-red-600' : ''}`}>
-                        {noData ? dash : (r.marketSafety != null ? fmtPct(r.marketSafety) : dash)}
-                      </td>
                       <td className={`px-3 py-2 font-medium ${marginColor}`}>
                         {noData ? dash : (r.margin != null ? `${r.margin.toFixed(1)}%` : dash)}
                       </td>
@@ -506,7 +515,7 @@ export default function Screener() {
                   )
                 })}
                 {pageRows.length === 0 && (
-                  <tr><td colSpan={18} className="px-3 py-8 text-center text-muted-foreground">Nenhum resultado encontrado.</td></tr>
+                  <tr><td colSpan={17} className="px-3 py-8 text-center text-muted-foreground">Nenhum resultado encontrado.</td></tr>
                 )}
               </tbody>
             </table>
