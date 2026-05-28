@@ -22,7 +22,19 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Calculator, Download, Briefcase, Info, CheckCircle } from 'lucide-react'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  Calculator, Download, Briefcase, Info, CheckCircle,
+  Star, ChevronUp, ChevronDown, ChevronsUpDown, Trash2,
+} from 'lucide-react'
 
 const PIE_COLORS = [
   '#22c55e', '#3b82f6', '#f59e0b', '#ef4444',
@@ -49,9 +61,48 @@ function PieSliceLabel({
   )
 }
 
+// ---------------------------------------------------------------------------
+// Virtual list — renders only visible rows for large ticker lists
+// ---------------------------------------------------------------------------
+
+const ITEM_HEIGHT = 44
+const LIST_HEIGHT = 360
+
+function VirtualList<T,>({
+  items,
+  renderItem,
+}: {
+  items: T[]
+  renderItem: (item: T, index: number) => React.ReactElement
+}) {
+  const [scrollTop, setScrollTop] = useState(0)
+  const overscan = 5
+  const startIndex = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - overscan)
+  const endIndex = Math.min(items.length, Math.ceil((scrollTop + LIST_HEIGHT) / ITEM_HEIGHT) + overscan)
+  const paddingTop = startIndex * ITEM_HEIGHT
+  const paddingBottom = (items.length - endIndex) * ITEM_HEIGHT
+
+  return (
+    <div
+      style={{ height: LIST_HEIGHT, overflowY: 'auto' }}
+      onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+      className="border rounded-md"
+    >
+      <div style={{ paddingTop, paddingBottom }}>
+        {items.slice(startIndex, endIndex).map((item, i) => renderItem(item, startIndex + i))}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Ticker selection row — shared between Search and Favorites tabs
+// ---------------------------------------------------------------------------
+
 type RawTicker = {
   ticker: string
   company_name: string | null
+  sector: string | null
   currency: string | null
   price: number | null
   dividend_yield: number | null
@@ -60,36 +111,231 @@ type RawTicker = {
   book_value_per_share: number | null
 }
 
+type SelectionRow = RawTicker & { dyPct: number | null }
+type ListSortKey = 'ticker' | 'company_name' | 'dyPct' | 'sector'
+type ListSortDir = 'asc' | 'desc'
+
+// Column widths — must match between header and row
+const COL_TICKER = 'w-20 shrink-0'
+const COL_COMPANY = 'flex-1 min-w-0'
+const COL_DY = 'w-16 shrink-0 text-right'
+const COL_SECTOR = 'w-28 shrink-0'
+const COL_STAR = 'w-8 shrink-0'
+
+function ListSortIcon({ col, sortKey, sortDir }: { col: string; sortKey: string; sortDir: ListSortDir }) {
+  if (sortKey !== col) return <ChevronsUpDown className="inline h-3 w-3 ml-0.5 opacity-40" />
+  return sortDir === 'asc'
+    ? <ChevronUp className="inline h-3 w-3 ml-0.5" />
+    : <ChevronDown className="inline h-3 w-3 ml-0.5" />
+}
+
+function SelectionColumnHeaders({
+  sortKey, sortDir, onSort,
+}: {
+  sortKey: ListSortKey
+  sortDir: ListSortDir
+  onSort: (col: ListSortKey) => void
+}) {
+  return (
+    <div className="flex items-center px-2 py-1 text-xs font-medium text-muted-foreground border-b bg-muted/30 select-none">
+      <div className="w-8 shrink-0" />
+      <div className={`${COL_TICKER} cursor-pointer`} onClick={() => onSort('ticker')}>
+        Ticker <ListSortIcon col="ticker" sortKey={sortKey} sortDir={sortDir} />
+      </div>
+      <div className={`${COL_COMPANY} cursor-pointer`} onClick={() => onSort('company_name')}>
+        Empresa <ListSortIcon col="company_name" sortKey={sortKey} sortDir={sortDir} />
+      </div>
+      <div className={`${COL_DY} cursor-pointer`} onClick={() => onSort('dyPct')}>
+        DY% <ListSortIcon col="dyPct" sortKey={sortKey} sortDir={sortDir} />
+      </div>
+      <div className={`${COL_SECTOR} cursor-pointer`} onClick={() => onSort('sector')}>
+        Setor <ListSortIcon col="sector" sortKey={sortKey} sortDir={sortDir} />
+      </div>
+      <div className={COL_STAR} />
+    </div>
+  )
+}
+
+function TickerRowItem({
+  row, selected, favorite, onToggleSelect, onToggleFavorite,
+}: {
+  row: SelectionRow
+  selected: boolean
+  favorite: boolean
+  onToggleSelect: () => void
+  onToggleFavorite: () => void
+}) {
+  return (
+    <div
+      style={{ height: ITEM_HEIGHT }}
+      className={`flex items-center px-2 gap-1 border-b last:border-0 hover:bg-muted/30 transition-colors ${selected ? 'bg-primary/5' : ''}`}
+    >
+      <div className="w-8 shrink-0 flex items-center justify-center">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggleSelect}
+          className="h-4 w-4 cursor-pointer accent-primary"
+        />
+      </div>
+      <div className={`${COL_TICKER} text-sm font-medium`}>{row.ticker}</div>
+      <div className={`${COL_COMPANY} text-sm text-muted-foreground truncate`}>
+        {row.company_name ?? '-'}
+      </div>
+      <div className={`${COL_DY} text-sm`}>
+        {row.dyPct != null ? `${row.dyPct.toFixed(2)}%` : '-'}
+      </div>
+      <div className={`${COL_SECTOR} text-xs text-muted-foreground truncate`}>
+        {row.sector ?? '-'}
+      </div>
+      <div className={`${COL_STAR} flex items-center justify-center`}>
+        <button
+          onClick={(e) => { e.stopPropagation(); onToggleFavorite() }}
+          className="p-0.5 rounded hover:bg-muted transition-colors"
+          aria-label={favorite ? 'Remover dos favoritos' : 'Adicionar aos favoritos'}
+        >
+          <Star className={`h-4 w-4 ${favorite ? 'fill-yellow-400 text-yellow-400' : 'text-muted-foreground'}`} />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+
 type ResultRow = SimulatorAllocation & { shares_override: number | null }
 
 export default function Simulator() {
   const { fmt, convert, currency, rates } = useCurrency()
 
-  const [rawData, setRawData] = useState<RawTicker[]>([])
+  // Data
+  const [allTickers, setAllTickers] = useState<RawTicker[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // Selection panel state
+  const [selectedTickers, setSelectedTickers] = useState<Set<string>>(new Set())
+  const [favoriteTickers, setFavoriteTickers] = useState<Set<string>>(new Set())
+  const [selectionTab, setSelectionTab] = useState<'search' | 'favorites'>('search')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const [listSortKey, setListSortKey] = useState<ListSortKey>('ticker')
+  const [listSortDir, setListSortDir] = useState<ListSortDir>('asc')
+  const [clearFavoritesOpen, setClearFavoritesOpen] = useState(false)
+
+  // Simulation state
   const [amount, setAmount] = useState('')
   const [results, setResults] = useState<ResultRow[]>([])
   const [calculated, setCalculated] = useState(false)
   const [addingToPortfolio, setAddingToPortfolio] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
 
+  // Debounce search
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(searchQuery), 200)
+    return () => clearTimeout(timer)
+  }, [searchQuery])
+
   useEffect(() => { fetchData() }, [])
+
+  // ---------------------------------------------------------------------------
+  // Derived data (memos before handlers that reference them)
+  // ---------------------------------------------------------------------------
+
+  const selectionRows = useMemo((): SelectionRow[] =>
+    allTickers.map((t) => ({
+      ...t,
+      dyPct: t.dividend_yield != null ? t.dividend_yield * 100 : null,
+    })),
+    [allTickers]
+  )
+
+  const filteredForSelection = useMemo((): SelectionRow[] => {
+    const q = debouncedQuery.toLowerCase()
+    const filtered = q
+      ? selectionRows.filter(
+          (t) =>
+            t.ticker.toLowerCase().includes(q) ||
+            (t.company_name ?? '').toLowerCase().includes(q)
+        )
+      : selectionRows
+
+    return [...filtered].sort((a, b) => {
+      const av = a[listSortKey]
+      const bv = b[listSortKey]
+      if (av == null && bv == null) return 0
+      if (av == null) return 1
+      if (bv == null) return -1
+      if (typeof av === 'string' && typeof bv === 'string')
+        return listSortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
+      return listSortDir === 'asc'
+        ? (av as number) - (bv as number)
+        : (bv as number) - (av as number)
+    })
+  }, [selectionRows, debouncedQuery, listSortKey, listSortDir])
+
+  const favoritesForSelection = useMemo(
+    () => filteredForSelection.filter((t) => favoriteTickers.has(t.ticker)),
+    [filteredForSelection, favoriteTickers]
+  )
+
+  const eligibleTickers = useMemo(() => {
+    return allTickers.filter((t) => {
+      if (!selectedTickers.has(t.ticker)) return false
+      if (!t.price || !t.dividend_yield || t.dividend_yield <= 0) return false
+      if (calcBazinSignal(t.dividend_yield, t.price) !== 'COMPRA') return false
+      const intrinsic = calcIntrinsicValue(t.eps, t.book_value_per_share)
+      const mos = calcMarginOfSafety(intrinsic, t.price)
+      // calcMarginOfSafety returns a decimal — 0.30 = 30%
+      return mos != null && mos >= 0.30
+    })
+  }, [allTickers, selectedTickers])
+
+  const displayRows = useMemo((): ResultRow[] => {
+    return results.map((r) => {
+      const shares = r.shares_override ?? r.shares
+      const actual_cost = shares * r.current_price
+      const leftover = r.allocated - actual_cost
+      const est_annual_div = shares * r.dps_display
+      return { ...r, shares, actual_cost, leftover, est_annual_div }
+    })
+  }, [results])
+
+  const totals = useMemo(() => ({
+    totalCost: displayRows.reduce((s, r) => s + r.actual_cost, 0),
+    totalShares: displayRows.reduce((s, r) => s + r.shares, 0),
+    totalAnnualDiv: displayRows.reduce((s, r) => s + r.est_annual_div, 0),
+    totalLeftover: displayRows.reduce((s, r) => s + r.leftover, 0),
+  }), [displayRows])
+
+  const pieData = useMemo(
+    () => displayRows.map((r) => ({ name: r.ticker, value: r.actual_cost })),
+    [displayRows]
+  )
+
+  // ---------------------------------------------------------------------------
+  // Handlers
+  // ---------------------------------------------------------------------------
 
   async function fetchData() {
     setLoading(true)
     setError(null)
-    const [profilesRes, pricesRes, fundRes] = await Promise.all([
-      supabase.from('stock_profiles').select('ticker, company_name, currency'),
+
+    const [profilesRes, pricesRes, fundRes, favoritesRes] = await Promise.all([
+      supabase.from('stock_profiles').select('ticker, company_name, sector, currency'),
       supabase.from('stock_prices').select('ticker, price'),
       supabase.from('stock_fundamentals').select('ticker, dividend_yield, dps, eps, book_value_per_share'),
+      supabase.from('simulator_favorites').select('ticker'),
     ])
+
     if (profilesRes.error || pricesRes.error || fundRes.error) {
-      setError('Erro ao carregar dados do screener.')
+      setError('Erro ao carregar dados do simulador.')
       setLoading(false)
       return
     }
+
     const profileMap = new Map((profilesRes.data ?? []).map((r) => [r.ticker, r]))
     const priceMap = new Map((pricesRes.data ?? []).map((r) => [r.ticker, r.price]))
     const fundMap = new Map((fundRes.data ?? []).map((r) => [r.ticker, r]))
@@ -101,6 +347,7 @@ export default function Simulator() {
       return {
         ticker: t.ticker,
         company_name: p?.company_name ?? null,
+        sector: p?.sector ?? null,
         currency: p?.currency ?? null,
         price: priceMap.get(t.ticker) ?? null,
         dividend_yield: f?.dividend_yield ?? null,
@@ -109,7 +356,14 @@ export default function Simulator() {
         book_value_per_share: f?.book_value_per_share ?? null,
       }
     })
-    setRawData(merged)
+
+    setAllTickers(merged)
+
+    const favorites = new Set((favoritesRes.data ?? []).map((r) => r.ticker))
+    setFavoriteTickers(favorites)
+    // Auto-select favorites on load; empty selection if none saved
+    setSelectedTickers(favorites.size > 0 ? new Set(favorites) : new Set())
+
     setLoading(false)
   }
 
@@ -124,15 +378,64 @@ export default function Simulator() {
     [rates, currency]
   )
 
-  const eligibleTickers = useMemo(() => {
-    return rawData.filter((t) => {
-      if (!t.price || !t.dividend_yield || t.dividend_yield <= 0) return false
-      if (calcBazinSignal(t.dividend_yield, t.price) !== 'COMPRA') return false
-      const intrinsic = calcIntrinsicValue(t.eps, t.book_value_per_share)
-      const mos = calcMarginOfSafety(intrinsic, t.price)
-      return mos != null && mos >= 30
+  function toggleSelected(ticker: string) {
+    setSelectedTickers((prev) => {
+      const next = new Set(prev)
+      if (next.has(ticker)) next.delete(ticker)
+      else next.add(ticker)
+      return next
     })
-  }, [rawData])
+  }
+
+  async function toggleFavorite(ticker: string) {
+    const isFav = favoriteTickers.has(ticker)
+    setFavoriteTickers((prev) => {
+      const next = new Set(prev)
+      if (isFav) next.delete(ticker)
+      else next.add(ticker)
+      return next
+    })
+    if (isFav) {
+      await supabase.from('simulator_favorites').delete().eq('ticker', ticker)
+    } else {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      await supabase.from('simulator_favorites').insert({ user_id: user.id, ticker })
+    }
+  }
+
+  async function addVisibleToFavorites() {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+    const currentList = selectionTab === 'search' ? filteredForSelection : favoritesForSelection
+    const toAdd = currentList.filter((t) => !favoriteTickers.has(t.ticker))
+    if (toAdd.length === 0) return
+    await supabase.from('simulator_favorites').insert(
+      toAdd.map((t) => ({ user_id: user.id, ticker: t.ticker }))
+    )
+    setFavoriteTickers((prev) => {
+      const next = new Set(prev)
+      toAdd.forEach((t) => next.add(t.ticker))
+      return next
+    })
+  }
+
+  async function clearAllFavorites() {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+    await supabase.from('simulator_favorites').delete().eq('user_id', user.id)
+    setFavoriteTickers(new Set())
+    setClearFavoritesOpen(false)
+  }
+
+  function handleListSort(col: ListSortKey) {
+    if (listSortKey === col) {
+      setListSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setListSortKey(col)
+      setListSortDir('asc')
+    }
+  }
 
   function handleCalculate() {
     const amountNum = parseFloat(amount.replace(/,/g, '.'))
@@ -161,23 +464,6 @@ export default function Simulator() {
     setCalculated(true)
   }
 
-  const displayRows = useMemo((): ResultRow[] => {
-    return results.map((r) => {
-      const shares = r.shares_override ?? r.shares
-      const actual_cost = shares * r.current_price
-      const leftover = r.allocated - actual_cost
-      const est_annual_div = shares * r.dps_display
-      return { ...r, shares, actual_cost, leftover, est_annual_div }
-    })
-  }, [results])
-
-  const totals = useMemo(() => ({
-    totalCost: displayRows.reduce((s, r) => s + r.actual_cost, 0),
-    totalShares: displayRows.reduce((s, r) => s + r.shares, 0),
-    totalAnnualDiv: displayRows.reduce((s, r) => s + r.est_annual_div, 0),
-    totalLeftover: displayRows.reduce((s, r) => s + r.leftover, 0),
-  }), [displayRows])
-
   function handleOverride(ticker: string, value: string) {
     const n = parseInt(value, 10)
     setResults((prev) =>
@@ -201,7 +487,7 @@ export default function Simulator() {
       r.shares,
       r.actual_cost.toFixed(2),
       r.est_annual_div.toFixed(2),
-      r.margin_of_safety.toFixed(1),
+      (r.margin_of_safety * 100).toFixed(1),
       'COMPRA',
     ])
     const csv = [headers, ...csvRows].map((row) => row.join(',')).join('\n')
@@ -258,17 +544,16 @@ export default function Simulator() {
     setTimeout(() => setToast(null), 4000)
   }
 
-  const pieData = useMemo(
-    () => displayRows.map((r) => ({ name: r.ticker, value: r.actual_cost })),
-    [displayRows]
-  )
-
-  const currencyLabel = currency
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
 
   if (loading) {
     return <div className="flex items-center justify-center h-64 text-muted-foreground">Carregando dados...</div>
   }
   if (error) return <div className="p-6 text-destructive">Erro: {error}</div>
+
+  const sortProps = { sortKey: listSortKey, sortDir: listSortDir, onSort: handleListSort }
 
   return (
     <div className="space-y-6">
@@ -284,10 +569,180 @@ export default function Simulator() {
         <div>
           <h1 className="text-2xl font-bold">Simulador de Investimento</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Ferramente de apoio à decisão. Não constitui recomendação de investimento.
+            Ferramenta de apoio à decisão. Não constitui recomendação de investimento.
           </p>
         </div>
       </div>
+
+      {/* Methodological disclaimer — static */}
+      <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900 leading-relaxed space-y-2">
+        <p className="font-semibold">⚠ Limitação Metodológica — Bazin e Graham</p>
+        <p>Os métodos Bazin (3/8) e Graham foram desenvolvidos para empresas tradicionais, intensivas em ativos e com dividendos consistentes. Eles tendem a subvalorizar sistematicamente empresas de tecnologia, alto crescimento e modelos asset-light (ex.: SAP, ASML, MSFT) — empresas que reinvestem lucros em vez de distribuir dividendos. Para esses perfis, complemente com a análise DCF, que captura a geração futura de caixa independentemente da política de dividendos.</p>
+      </div>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Ticker Selection Panel                                               */}
+      {/* ------------------------------------------------------------------ */}
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base">Seleção de Tickers</CardTitle>
+            <span className="text-sm text-muted-foreground font-medium">
+              {selectedTickers.size} selecionado{selectedTickers.size !== 1 ? 's' : ''}
+            </span>
+          </div>
+        </CardHeader>
+        <CardContent className="px-6 pb-6">
+          <Tabs value={selectionTab} onValueChange={(v) => setSelectionTab(v as 'search' | 'favorites')}>
+            <TabsList className="mb-4">
+              <TabsTrigger value="search">Pesquisar &amp; Selecionar</TabsTrigger>
+              <TabsTrigger value="favorites">
+                Favoritos ({favoriteTickers.size})
+              </TabsTrigger>
+            </TabsList>
+
+            {/* Tab 1 — Search & Select */}
+            <TabsContent value="search" className="mt-0">
+              <Input
+                placeholder="Buscar por ticker ou empresa..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="mb-3"
+              />
+
+              {/* Bulk actions (visible when ≥ 1 ticker is selected) */}
+              {selectedTickers.size > 0 && (
+                <div className="flex flex-wrap gap-2 mb-3">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setSelectedTickers((prev) => {
+                        const next = new Set(prev)
+                        filteredForSelection.forEach((t) => next.add(t.ticker))
+                        return next
+                      })
+                    }}
+                  >
+                    Selecionar Todos Visíveis
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setSelectedTickers(new Set())}
+                  >
+                    Desmarcar Todos
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={addVisibleToFavorites}
+                  >
+                    <Star className="h-3.5 w-3.5 mr-1" />
+                    Adicionar Visíveis a Favoritos
+                  </Button>
+                </div>
+              )}
+
+              <SelectionColumnHeaders {...sortProps} />
+              {filteredForSelection.length === 0 ? (
+                <div
+                  className="border rounded-md flex items-center justify-center text-sm text-muted-foreground"
+                  style={{ height: LIST_HEIGHT }}
+                >
+                  Nenhum ticker encontrado.
+                </div>
+              ) : (
+                <VirtualList
+                  items={filteredForSelection}
+                  renderItem={(row) => (
+                    <TickerRowItem
+                      key={row.ticker}
+                      row={row}
+                      selected={selectedTickers.has(row.ticker)}
+                      favorite={favoriteTickers.has(row.ticker)}
+                      onToggleSelect={() => toggleSelected(row.ticker)}
+                      onToggleFavorite={() => toggleFavorite(row.ticker)}
+                    />
+                  )}
+                />
+              )}
+            </TabsContent>
+
+            {/* Tab 2 — Favorites */}
+            <TabsContent value="favorites" className="mt-0">
+              <div className="flex flex-wrap gap-2 mb-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setSelectedTickers((prev) => {
+                      const next = new Set(prev)
+                      favoritesForSelection.forEach((t) => next.add(t.ticker))
+                      return next
+                    })
+                  }}
+                  disabled={favoritesForSelection.length === 0}
+                >
+                  Selecionar Todos os Favoritos
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-destructive hover:text-destructive"
+                  onClick={() => setClearFavoritesOpen(true)}
+                  disabled={favoriteTickers.size === 0}
+                >
+                  <Trash2 className="h-3.5 w-3.5 mr-1" />
+                  Limpar Favoritos
+                </Button>
+              </div>
+
+              {favoritesForSelection.length === 0 ? (
+                <div
+                  className="border rounded-md flex items-center justify-center text-sm text-center px-8 text-muted-foreground"
+                  style={{ height: LIST_HEIGHT }}
+                >
+                  Nenhum favorito ainda. Marque tickers com ★ na aba de pesquisa para salvá-los aqui.
+                </div>
+              ) : (
+                <>
+                  <SelectionColumnHeaders {...sortProps} />
+                  <VirtualList
+                    items={favoritesForSelection}
+                    renderItem={(row) => (
+                      <TickerRowItem
+                        key={row.ticker}
+                        row={row}
+                        selected={selectedTickers.has(row.ticker)}
+                        favorite={favoriteTickers.has(row.ticker)}
+                        onToggleSelect={() => toggleSelected(row.ticker)}
+                        onToggleFavorite={() => toggleFavorite(row.ticker)}
+                      />
+                    )}
+                  />
+                </>
+              )}
+            </TabsContent>
+          </Tabs>
+        </CardContent>
+      </Card>
+
+      {/* Clear favorites confirmation */}
+      <Dialog open={clearFavoritesOpen} onOpenChange={setClearFavoritesOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Limpar Favoritos</DialogTitle>
+            <DialogDescription>
+              Isso removerá todos os {favoriteTickers.size} favorito(s) salvos. Esta ação não pode ser desfeita.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setClearFavoritesOpen(false)}>Cancelar</Button>
+            <Button variant="destructive" onClick={clearAllFavorites}>Confirmar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Eligibility summary */}
       <Card>
@@ -295,21 +750,33 @@ export default function Simulator() {
           <div className="flex items-start gap-3">
             <Info className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
             <div className="text-sm text-muted-foreground space-y-1">
-              <p>
-                <span className="font-medium text-foreground">{eligibleTickers.length} ticker{eligibleTickers.length !== 1 ? 's' : ''}</span>
-                {' '}elegíveis de {rawData.length} total — critérios: sinal Bazin = COMPRA <em>e</em> Margem de Segurança Graham ≥ 30%.
-              </p>
-              {eligibleTickers.length > 0 && (
-                <p className="text-xs">
-                  {eligibleTickers.map((t) => t.ticker).join(', ')}
-                </p>
+              {selectedTickers.size === 0 ? (
+                <p>Selecione ao menos um ticker para rodar a simulação.</p>
+              ) : (
+                <>
+                  <p>
+                    <span className="font-medium text-foreground">
+                      {eligibleTickers.length} elegíve{eligibleTickers.length !== 1 ? 'is' : 'l'}
+                    </span>
+                    {' '}de{' '}
+                    <span className="font-medium text-foreground">
+                      {selectedTickers.size} selecionado{selectedTickers.size !== 1 ? 's' : ''}
+                    </span>
+                    {' '}({allTickers.length} disponíveis) — critérios: sinal Bazin = COMPRA <em>e</em> Margem de Segurança Graham ≥ 30%.
+                  </p>
+                  {eligibleTickers.length > 0 && (
+                    <p className="text-xs">
+                      {eligibleTickers.map((t) => t.ticker).join(', ')}
+                    </p>
+                  )}
+                </>
               )}
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Input */}
+      {/* Amount & calculate */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Valor a Investir</CardTitle>
@@ -317,7 +784,7 @@ export default function Simulator() {
         <CardContent className="px-6 pb-6">
           <div className="flex items-end gap-4 max-w-sm">
             <div className="flex-1 space-y-2">
-              <Label htmlFor="amount">Montante ({currencyLabel})</Label>
+              <Label htmlFor="amount">Montante ({currency})</Label>
               <Input
                 id="amount"
                 type="number"
@@ -338,10 +805,10 @@ export default function Simulator() {
               Calcular Alocação
             </Button>
           </div>
-          {eligibleTickers.length < 2 && (
+          {selectedTickers.size > 0 && eligibleTickers.length < 2 && (
             <p className="mt-3 text-sm text-amber-600">
               Tickers insuficientes que atendem aos critérios (sinal Bazin COMPRA + Margem Graham ≥ 30%).
-              Adicione mais tickers ou verifique a atualização dos dados.
+              Adicione mais tickers à seleção ou verifique a atualização dos dados.
             </p>
           )}
         </CardContent>
@@ -384,7 +851,6 @@ export default function Simulator() {
                     innerRadius={75}
                     outerRadius={120}
                     dataKey="value"
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     labelLine={false}
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     label={(props: any) => (
@@ -421,7 +887,7 @@ export default function Simulator() {
                 <tr>
                   {[
                     'Ticker', 'Empresa', 'DY%', 'Peso%', 'Alocado',
-                    'Qtd', 'Custo', 'Div. Anual Est.', 'Margem Seg.%', 'Sinal',
+                    'Qtd', 'Custo', 'Div. Anual Est.', 'Margem Seg.', 'Sinal',
                   ].map((h) => (
                     <th key={h} className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">
                       {h}
@@ -460,8 +926,8 @@ export default function Simulator() {
                     <td className="px-3 py-2">{fmt(r.actual_cost, currency)}</td>
                     <td className="px-3 py-2 text-green-700 font-medium">{fmt(r.est_annual_div, currency)}</td>
                     <td className="px-3 py-2">
-                      <span className={`${r.margin_of_safety >= 30 ? 'text-green-600' : 'text-yellow-600'} font-medium`}>
-                        {fmtNumber(r.margin_of_safety)}%
+                      <span className={`${r.margin_of_safety >= 0.30 ? 'text-green-600' : 'text-yellow-600'} font-medium`}>
+                        {fmtPct(r.margin_of_safety)}
                       </span>
                     </td>
                     <td className="px-3 py-2">

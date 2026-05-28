@@ -7,8 +7,7 @@ import {
   calcBazinSignal,
   calcIntrinsicValue,
   calcFairValue,
-  calcIntrinsicUpside,  
-  calcFairValueUpside,
+  calcIntrinsicUpside,
   calcMarginOfSafety,
   calcSafetyColor,
   calcCurrentValue,
@@ -51,7 +50,7 @@ import {
 import {
   ArrowLeft, ExternalLink, Pencil, TrendingUp, TrendingDown,
   Bell, BellOff, Trash2, GitCompareArrows, X, Check,
-  Info, AlertTriangle,
+  Info, AlertTriangle, ChevronDown,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -163,7 +162,6 @@ type ColData = {
   intrinsic: number | null
   fair: number | null
   marginOfSafety: number | null
-  marketSafety: number | null
   teto8: number | null
   teto6: number | null
   signal: 'COMPRA' | 'NÃO COMPRA' | null
@@ -298,7 +296,6 @@ function buildColData(
     intrinsic: calcIntrinsicValue(fund?.eps, fund?.book_value_per_share),
     fair: fairValue,
     marginOfSafety: calcMarginOfSafety(fairValue, price),
-    marketSafety: calcFairValueUpside(fairValue, price), // Upside do Fair Value
     teto8: calcTeto8(fund?.dividend_yield, price),
     teto6: calcTeto6(fund?.dividend_yield, price),
     signal: calcBazinSignal(fund?.dividend_yield, price),
@@ -628,6 +625,15 @@ export default function Analysis() {
   const [dcfDiscountRate, setDcfDiscountRate] = useState(0.10)
   const [dcfYears, setDcfYears] = useState(10)
 
+  const [disclaimerCollapsed, setDisclaimerCollapsed] = useState(() => {
+    try { return localStorage.getItem('disclaimer_graham_collapsed') === 'true' } catch { return false }
+  })
+  function toggleDisclaimer() {
+    const next = !disclaimerCollapsed
+    setDisclaimerCollapsed(next)
+    try { localStorage.setItem('disclaimer_graham_collapsed', String(next)) } catch {}
+  }
+
   const compareTickers = useMemo(() => {
     const param = searchParams.get('compare')
     return param ? param.split(',').filter(Boolean).slice(0, 3) : []
@@ -837,7 +843,6 @@ export default function Analysis() {
   const fair = calcFairValue(f?.eps, f?.earnings_growth_5y)
   const upside = calcIntrinsicUpside(intrinsic, price)
   const marginofSafety = calcMarginOfSafety(fair, price)
-  const fairValueUpside = calcFairValueUpside(fair, price)
   const teto8 = calcTeto8(f?.dividend_yield, price)
   const teto6 = calcTeto6(f?.dividend_yield, price)
   const signal = calcBazinSignal(f?.dividend_yield, price)
@@ -1003,6 +1008,30 @@ export default function Analysis() {
           <Card>
             <CardHeader><CardTitle className="text-base">Análise Graham</CardTitle></CardHeader>
             <CardContent className="space-y-4">
+              {/* Methodological disclaimer */}
+              <div className="rounded-md border border-amber-200 bg-amber-50 text-amber-900 text-sm overflow-hidden">
+                <button
+                  className="w-full flex items-center gap-2 px-4 py-2.5 hover:bg-amber-100/60 transition-colors text-left"
+                  onClick={toggleDisclaimer}
+                >
+                  <Info className="h-3.5 w-3.5 shrink-0" />
+                  <span className="font-medium text-xs flex-1">Sobre esta metodologia</span>
+                  <ChevronDown className={`h-3.5 w-3.5 transition-transform duration-200 ${disclaimerCollapsed ? '' : 'rotate-180'}`} />
+                </button>
+                {!disclaimerCollapsed && (
+                  <div className="px-4 pb-4 space-y-2 text-xs leading-relaxed border-t border-amber-200">
+                    <p className="font-semibold pt-3">⚠ Limitação Metodológica</p>
+                    <p>Os métodos Bazin (3/8) e Graham foram desenvolvidos para empresas tradicionais, intensivas em ativos e com pagamentos consistentes de dividendos. Eles tendem a subvalorizar sistematicamente:</p>
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      <li>Empresas de tecnologia e software (baixo valor contábil, alto intangível)</li>
+                      <li>Empresas com investimentos intensivos em P&amp;D (SAP, ASML, MSFT)</li>
+                      <li>Empresas de alto crescimento que reinvestem lucros em vez de pagar dividendos</li>
+                      <li>Modelos de negócio asset-light com fortes vantagens competitivas</li>
+                    </ul>
+                    <p>Para esses perfis, considere complementar com a análise DCF, que captura a geração futura de caixa independentemente da política de dividendos.</p>
+                  </div>
+                )}
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <SafetyIndicator value={marginofSafety} label="Margem de Segurança" />
                 <div className="rounded-lg border bg-muted/30 p-4">
@@ -1021,7 +1050,6 @@ export default function Analysis() {
                 </div>
               </div>
               <div>
-                <MetricRow label="Seg. Juros de Mercado" value={fairValueUpside != null ? fmtPct(fairValueUpside) : '-'} color={fairValueUpside != null && fairValueUpside > 0 ? 'text-green-600' : 'text-red-600'} />
                 <MetricRow label="LPA (EPS)" value={fmtNumber(f?.eps)} />
                 <MetricRow label="VPA" value={fmtNumber(f?.book_value_per_share)} />
                 <MetricRow label="Lucros 5 Anos (g)" value={f?.earnings_growth_5y != null ? `${(f.earnings_growth_5y * 100).toFixed(1)}%` : '-'} />
@@ -1044,6 +1072,30 @@ export default function Analysis() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
+              {/* Methodological disclaimer — same state as Graham tab */}
+              <div className="rounded-md border border-amber-200 bg-amber-50 text-amber-900 text-sm overflow-hidden">
+                <button
+                  className="w-full flex items-center gap-2 px-4 py-2.5 hover:bg-amber-100/60 transition-colors text-left"
+                  onClick={toggleDisclaimer}
+                >
+                  <Info className="h-3.5 w-3.5 shrink-0" />
+                  <span className="font-medium text-xs flex-1">Sobre esta metodologia</span>
+                  <ChevronDown className={`h-3.5 w-3.5 transition-transform duration-200 ${disclaimerCollapsed ? '' : 'rotate-180'}`} />
+                </button>
+                {!disclaimerCollapsed && (
+                  <div className="px-4 pb-4 space-y-2 text-xs leading-relaxed border-t border-amber-200">
+                    <p className="font-semibold pt-3">⚠ Limitação Metodológica</p>
+                    <p>Os métodos Bazin (3/8) e Graham foram desenvolvidos para empresas tradicionais, intensivas em ativos e com pagamentos consistentes de dividendos. Eles tendem a subvalorizar sistematicamente:</p>
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      <li>Empresas de tecnologia e software (baixo valor contábil, alto intangível)</li>
+                      <li>Empresas com investimentos intensivos em P&amp;D (SAP, ASML, MSFT)</li>
+                      <li>Empresas de alto crescimento que reinvestem lucros em vez de pagar dividendos</li>
+                      <li>Modelos de negócio asset-light com fortes vantagens competitivas</li>
+                    </ul>
+                    <p>Para esses perfis, considere complementar com a análise DCF, que captura a geração futura de caixa independentemente da política de dividendos.</p>
+                  </div>
+                )}
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="rounded-lg border bg-muted/30 p-4">
                   <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">Teto 8%</div>
