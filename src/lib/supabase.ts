@@ -1,13 +1,16 @@
 import { createClient } from '@supabase/supabase-js'
 
-const supabaseUrl = import.meta.env.SUPABASE_URL as string
-const supabaseAnonKey = import.meta.env.SUPABASE_ANON_KEY as string
+const supabaseUrl = (import.meta.env.SUPABASE_URL ?? '') as string
+const supabaseAnonKey = (import.meta.env.SUPABASE_ANON_KEY ?? '') as string
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error('Missing SUPABASE_URL or SUPABASE_ANON_KEY environment variables')
-}
+export const supabaseReady = !!(supabaseUrl && supabaseAnonKey)
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+// createClient is called even when vars are missing so the module always
+// exports a valid object — App.tsx checks supabaseReady before using it.
+export const supabase = createClient(
+  supabaseUrl || 'https://placeholder.supabase.co',
+  supabaseAnonKey || 'placeholder-key'
+)
 
 export type Database = {
   public: {
