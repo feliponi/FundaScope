@@ -450,11 +450,12 @@ def calc_earnings_growth_5y(ticker_obj: yf.Ticker) -> Optional[float]:
 
         cagr = (end / start) ** (1 / n_periods) - 1
 
-        # Sanity cap: CAGR > 100 % p.a. is almost certainly bad data
+        # Log unusually high values for visibility, but store them — the frontend
+        # Graham formula caps g at 25% internally to prevent absurd fair-value outputs.
+        # High-growth tech stocks (TTD, CRM, etc.) can have real CAGRs above 100%.
         if cagr > 1.0:
-            log.warning("Implausibly high earnings CAGR (%.1f%%) for %s — discarding",
-                        cagr * 100, getattr(ticker_obj, "ticker", "?"))
-            return None
+            log.info("High earnings CAGR (%.1f%%) for %s — storing as-is",
+                     cagr * 100, getattr(ticker_obj, "ticker", "?"))
 
         return cagr
     except Exception as exc:
