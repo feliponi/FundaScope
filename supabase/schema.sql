@@ -272,3 +272,33 @@ CREATE POLICY "portfolio_snapshots_select_own"
 
 CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_user_date
   ON portfolio_snapshots (user_id, snapshot_date);
+
+-- ============================================================
+-- FEATURE 4 — ANALYST INSIGHTS & DCF
+-- ============================================================
+
+ALTER TABLE stock_fundamentals
+  ADD COLUMN IF NOT EXISTS free_cash_flow    BIGINT,
+  ADD COLUMN IF NOT EXISTS shares_outstanding BIGINT;
+
+CREATE TABLE IF NOT EXISTS analyst_data (
+  ticker            TEXT PRIMARY KEY,
+  target_low        NUMERIC,
+  target_mean       NUMERIC,
+  target_high       NUMERIC,
+  target_median     NUMERIC,
+  current_price     NUMERIC,
+  rec_strong_buy    INTEGER,
+  rec_buy           INTEGER,
+  rec_hold          INTEGER,
+  rec_underperform  INTEGER,
+  rec_sell          INTEGER,
+  rec_history       JSONB,
+  updated_at        TIMESTAMPTZ,
+  CONSTRAINT fk_ticker FOREIGN KEY (ticker) REFERENCES tickers(ticker) ON DELETE CASCADE
+);
+
+ALTER TABLE analyst_data ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "analyst_data_select_authenticated"
+  ON analyst_data FOR SELECT TO authenticated USING (true);

@@ -608,6 +608,9 @@ def update_fundamentals_and_profiles(tickers: list[str], include_profile: bool =
             # size
             "market_cap": safe_int(info.get("marketCap")),
             "beta": safe_float(info.get("beta")),
+            # dcf inputs
+            "free_cash_flow": safe_int(info.get("freeCashflow")),
+            "shares_outstanding": safe_int(info.get("sharesOutstanding")),
             # meta
             "fundamentals_updated_at": now_utc(),
         }
@@ -638,6 +641,102 @@ def update_fundamentals_and_profiles(tickers: list[str], include_profile: bool =
             failed.append(tkr)
             time.sleep(random.uniform(INFO_DELAY_MIN, INFO_DELAY_MAX))
             continue
+
+        time.sleep(random.uniform(INFO_DELAY_MIN, INFO_DELAY_MAX))
+
+    return failed
+
+
+def update_analyst_data(tickers: list[str]) -> list[str]:
+    """Fetch analyst price targets and recommendation history via yfinance. Returns failed tickers."""
+    failed: list[str] = []
+
+    for idx, tkr in enumerate(tickers, 1):
+        if idx % LOG_PROGRESS_EVERY == 0:
+            log.info("Analyst data progress: %d/%d tickers processed", idx, len(tickers))
+
+        info, ticker_obj = fetch_info_with_retry(tkr)
+        if info is None or ticker_obj is None:
+            failed.append(tkr)
+            time.sleep(random.uniform(INFO_DELAY_MIN, INFO_DELAY_MAX))
+            continue
+
+        try:
+            target_low    = safe_float(info.get("targetLowPrice"))
+            target_mean   = safe_float(info.get("targetMeanPrice"))
+            target_high   = safe_float(info.get("targetHighPrice"))
+            target_median = safe_float(info.get("targetMedianPrice"))
+            current_price = safe_float(info.get("regularMarketPrice") or info.get("currentPrice"))
+
+            rec_strong_buy = rec_buy = rec_hold = rec_underperform = rec_sell = None
+            rec_history: Optional[list] = None
+
+            try:
+                rec_df = ticker_obj.recommendations_summary
+                if rec_df is None or rec_df.empty:
+                    rec_df = None
+            except Exception as exc:
+                log.debug("recommendations_summary unavailable for %s: %s", tkr, exc)
+                rec_df = None
+
+            if rec_df is not None:
+                # Normalise: ensure 'period' is a column (some yf versions use it as index)
+                if "period" not in rec_df.columns and rec_df.index.name == "period":
+                    rec_df = rec_df.reset_index()
+
+                history_rows: list[dict] = []
+                for p in ["0m", "-1m", "-2m", "-3m"]:
+                    if "period" in rec_df.columns:
+                        sub = rec_df[rec_df["period"] == p]
+                    else:
+                        sub = rec_df[rec_df.index == p]
+                    if sub.empty:
+                        continue
+                    row = sub.iloc[0]
+                    entry = {
+                        "period":     p,
+                        "strongBuy":  safe_int(row.get("strongBuy")),
+                        "buy":        safe_int(row.get("buy")),
+                        "hold":       safe_int(row.get("hold")),
+                        "sell":       safe_int(row.get("sell")),
+                        "strongSell": safe_int(row.get("strongSell")),
+                    }
+                    history_rows.append(entry)
+                    if p == "0m":
+                        rec_strong_buy   = entry["strongBuy"]
+                        rec_buy          = entry["buy"]
+                        rec_hold         = entry["hold"]
+                        rec_underperform = entry["sell"]
+                        rec_sell         = entry["strongSell"]
+
+                if history_rows:
+                    rec_history = history_rows
+
+            analyst_row: dict[str, Any] = {
+                "ticker":           tkr,
+                "target_low":       target_low,
+                "target_mean":      target_mean,
+                "target_high":      target_high,
+                "target_median":    target_median,
+                "current_price":    current_price,
+                "rec_strong_buy":   rec_strong_buy,
+                "rec_buy":          rec_buy,
+                "rec_hold":         rec_hold,
+                "rec_underperform": rec_underperform,
+                "rec_sell":         rec_sell,
+                "rec_history":      rec_history,
+                "updated_at":       now_utc(),
+            }
+
+            supabase.table("analyst_data").upsert(analyst_row, on_conflict="ticker").execute()
+            log.info(
+                "Analyst data upserted for %s (low=%.2f high=%.2f)",
+                tkr, target_low or 0, target_high or 0,
+            )
+
+        except Exception as exc:
+            log.error("Analyst data update failed for %s: %s", tkr, exc)
+            failed.append(tkr)
 
         time.sleep(random.uniform(INFO_DELAY_MIN, INFO_DELAY_MAX))
 
@@ -724,6 +823,7 @@ def main() -> None:
     elif mode == "all":
         failed_p = update_prices(tickers)
         failed_f = update_fundamentals_and_profiles(tickers, include_profile=False)
+        update_analyst_data(tickers)
         combined_failed = list(set(failed_p) | set(failed_f))
         all_failed = retry_failed(combined_failed, lambda t: list(set(update_prices(t)) | set(update_fundamentals_and_profiles(t, include_profile=False)))) if combined_failed else []
         take_portfolio_snapshots()
@@ -731,6 +831,7 @@ def main() -> None:
     elif mode == "init":
         failed_f = update_fundamentals_and_profiles(tickers, include_profile=True)
         failed_p = update_prices(tickers)
+        update_analyst_data(tickers)
 
         # Mark successfully processed tickers
         succeeded = [t for t in tickers if t not in set(failed_f) | set(failed_p)]

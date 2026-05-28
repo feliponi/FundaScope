@@ -18,13 +18,16 @@ import {
   fmtPct,
   fmtNumber,
   fmtLargeNumber,
+  calculateDCF,
 } from '@/lib/calculations'
+import type { DCFResult } from '@/lib/calculations'
 import { useCurrency } from '@/lib/currency'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import {
   Dialog,
   DialogContent,
@@ -33,7 +36,23 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { ArrowLeft, ExternalLink, Pencil, TrendingUp, TrendingDown, Bell, BellOff, Trash2, GitCompareArrows, X, Check } from 'lucide-react'
+import {
+  ComposedChart,
+  BarChart,
+  Bar,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip as RechartsTooltip,
+  Legend,
+  ResponsiveContainer,
+} from 'recharts'
+import {
+  ArrowLeft, ExternalLink, Pencil, TrendingUp, TrendingDown,
+  Bell, BellOff, Trash2, GitCompareArrows, X, Check,
+  Info, AlertTriangle,
+} from 'lucide-react'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,7 +95,31 @@ type Fundamentals = {
   revenue_growth_yoy: number | null
   market_cap: number | null
   beta: number | null
+  free_cash_flow: number | null
+  shares_outstanding: number | null
   fundamentals_updated_at: string | null
+}
+
+type AnalystData = {
+  target_low: number | null
+  target_mean: number | null
+  target_high: number | null
+  target_median: number | null
+  current_price: number | null
+  rec_strong_buy: number | null
+  rec_buy: number | null
+  rec_hold: number | null
+  rec_underperform: number | null
+  rec_sell: number | null
+  rec_history: Array<{
+    period: string
+    strongBuy: number | null
+    buy: number | null
+    hold: number | null
+    sell: number | null
+    strongSell: number | null
+  }> | null
+  updated_at: string | null
 }
 
 type PortfolioPos = { id: string; quantity: number; avg_price: number }
@@ -117,7 +160,6 @@ type ColData = {
   earnings_growth_5y: number | null
   revenue_growth_yoy: number | null
   market_cap: number | null
-  // calculated
   intrinsic: number | null
   fair: number | null
   marginOfSafety: number | null
@@ -153,6 +195,67 @@ function SafetyIndicator({ value, label }: { value: number | null; label: string
     <div className={`rounded-lg border p-4 ${colorClass}`}>
       <div className="text-xs font-medium uppercase tracking-wide mb-1">{label}</div>
       <div className="text-2xl font-bold">{value != null ? `${(value * 100).toFixed(1)}%` : '-'}</div>
+    </div>
+  )
+}
+
+function PriceTargetTrack({
+  low, mean, median, high, current, currency,
+}: {
+  low: number; mean: number | null; median: number | null; high: number
+  current: number | null; currency: string | null
+}) {
+  const { fmt } = useCurrency()
+  if (high <= low) return null
+
+  const padding = (high - low) * 0.06
+  const domainMin = Math.min(low, current ?? low) - padding
+  const domainMax = Math.max(high, current ?? high) + padding
+  const domainRange = domainMax - domainMin
+  const pct = (v: number) => Math.max(0.5, Math.min(99.5, ((v - domainMin) / domainRange) * 100))
+
+  const markers: { id: string; value: number; label: string; color: string; thick?: boolean }[] = [
+    { id: 'low',  value: low,  label: 'Mínimo',      color: '#ef4444' },
+    { id: 'high', value: high, label: 'Máximo',       color: '#22c55e' },
+  ]
+  if (mean   != null) markers.push({ id: 'mean',    value: mean,    label: 'Média',       color: '#3b82f6' })
+  if (median != null) markers.push({ id: 'median',  value: median,  label: 'Mediana',     color: '#8b5cf6' })
+  if (current != null) markers.push({ id: 'current', value: current, label: 'Preço Atual', color: '#0f172a', thick: true })
+
+  return (
+    <div>
+      <div className="relative h-4 my-3">
+        <div
+          className="absolute inset-y-0 rounded-full"
+          style={{
+            left: `${pct(low)}%`,
+            right: `${100 - pct(high)}%`,
+            background: 'linear-gradient(to right, #fca5a5, #fde68a, #86efac)',
+          }}
+        />
+        {markers.map((m) => (
+          <div
+            key={m.id}
+            className="absolute top-0 bottom-0"
+            style={{
+              left: `${pct(m.value)}%`,
+              width: m.thick ? 3 : 2,
+              backgroundColor: m.color,
+              transform: 'translateX(-50%)',
+            }}
+            title={`${m.label}: ${fmt(m.value, currency)}`}
+          />
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+        {markers.map((m) => (
+          <div key={m.id} className="flex items-center gap-1.5">
+            <div className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: m.color }} />
+            <span className="text-muted-foreground">{m.label}:</span>
+            <span className="font-medium">{fmt(m.value, currency)}</span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -219,7 +322,6 @@ type MetricDef = {
 }
 
 const COMPARISON_METRICS: MetricDef[] = [
-  // Price & Valuation
   { section: 'Preço & Valuation', label: 'Preço Atual', get: (d) => d.price, renderCell: (d, f) => f(d.price, d.currency) },
   { label: 'Market Cap', get: (d) => d.market_cap, renderCell: (d) => fmtLargeNumber(d.market_cap) },
   { label: 'P/L', get: (d) => d.pe, renderCell: (d) => fmtNumber(d.pe), higherBetter: false },
@@ -227,7 +329,6 @@ const COMPARISON_METRICS: MetricDef[] = [
   { label: 'PSR', get: (d) => d.psr, renderCell: (d) => fmtNumber(d.psr), higherBetter: false },
   { label: 'EV/EBIT', get: (d) => d.ev_ebit, renderCell: (d) => fmtNumber(d.ev_ebit), higherBetter: false },
   { label: 'PEG', get: (d) => d.peg, renderCell: (d) => fmtNumber(d.peg), higherBetter: false },
-  // Graham
   { section: 'Análise Graham', label: 'V. Intrínseco', get: (d) => d.intrinsic, renderCell: (d, f) => f(d.intrinsic, d.currency), higherBetter: true },
   { label: 'V. Justo', get: (d) => d.fair, renderCell: (d, f) => f(d.fair, d.currency), higherBetter: true },
   { label: 'Margem Seg. %', get: (d) => d.marginOfSafety, renderCell: (d) => d.marginOfSafety != null ? `${(d.marginOfSafety * 100).toFixed(1)}%` : '—', higherBetter: true },
@@ -244,33 +345,21 @@ const COMPARISON_METRICS: MetricDef[] = [
         </Badge>
       ) : '—',
   },
-  // Profitability
   { section: 'Rentabilidade', label: 'ROE', get: (d) => d.roe, renderCell: (d) => d.roe != null ? fmtPct(d.roe) : '—', higherBetter: true },
   { label: 'ROA', get: (d) => d.roa, renderCell: (d) => d.roa != null ? fmtPct(d.roa) : '—', higherBetter: true },
   { label: 'ROIC', get: (d) => d.roic, renderCell: (d) => d.roic != null ? fmtPct(d.roic) : '—', higherBetter: true },
   { label: 'Margem Bruta', get: (d) => d.gross_margin, renderCell: (d) => d.gross_margin != null ? fmtPct(d.gross_margin) : '—', higherBetter: true },
   { label: 'Margem EBIT', get: (d) => d.ebit_margin, renderCell: (d) => d.ebit_margin != null ? fmtPct(d.ebit_margin) : '—', higherBetter: true },
   { label: 'Margem Líquida', get: (d) => d.net_margin, renderCell: (d) => d.net_margin != null ? fmtPct(d.net_margin) : '—', higherBetter: true },
-  // Debt & Liquidity
   { section: 'Dívida & Liquidez', label: 'Div./Patri.', get: (d) => d.debt_equity, renderCell: (d) => fmtNumber(d.debt_equity), higherBetter: false },
   { label: 'Liquidez Corrente', get: (d) => d.current_ratio, renderCell: (d) => fmtNumber(d.current_ratio), higherBetter: true },
   { label: 'Dív.Líq/EBIT', get: (d) => d.net_debt_ebit, renderCell: (d) => fmtNumber(d.net_debt_ebit), higherBetter: false },
-  // Dividends
   { section: 'Dividendos', label: 'DY %', get: (d) => d.dividend_yield, renderCell: (d) => d.dividend_yield != null ? fmtPct(d.dividend_yield) : '—', higherBetter: true },
   { label: 'DPS', get: (d) => d.dps, renderCell: (d, f) => f(d.dps, d.currency), higherBetter: true },
   { label: 'Payout Médio', get: (d) => d.payout_avg, renderCell: (d) => d.payout_avg != null ? `${(d.payout_avg * 100).toFixed(1)}%` : '—' },
-  // Growth
   { section: 'Crescimento', label: 'Lucros 5 Anos', get: (d) => d.earnings_growth_5y, renderCell: (d) => d.earnings_growth_5y != null ? fmtPct(d.earnings_growth_5y) : '—', higherBetter: true },
   { label: 'Receita YoY', get: (d) => d.revenue_growth_yoy, renderCell: (d) => d.revenue_growth_yoy != null ? fmtPct(d.revenue_growth_yoy) : '—', higherBetter: true },
 ]
-
-// ---------------------------------------------------------------------------
-// Comparison table
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Flat table rows for proper section header rendering
-// ---------------------------------------------------------------------------
 
 type TableRow =
   | { kind: 'section'; label: string }
@@ -299,8 +388,7 @@ function ComparisonTableV2({ columns, onRemove }: {
     const validVals = vals.filter((v): v is number => v != null)
     if (validVals.length < 2) return null
     const best = metric.higherBetter ? Math.max(...validVals) : Math.min(...validVals)
-    const firstBestIdx = vals.findIndex((v) => v === best)
-    return firstBestIdx
+    return vals.findIndex((v) => v === best)
   }
 
   return (
@@ -372,17 +460,10 @@ function ComparisonTableV2({ columns, onRemove }: {
 // ---------------------------------------------------------------------------
 
 function CompareModal({
-  open,
-  onClose,
-  currentTicker,
-  selected,
-  onConfirm,
+  open, onClose, currentTicker, selected, onConfirm,
 }: {
-  open: boolean
-  onClose: () => void
-  currentTicker: string
-  selected: string[]
-  onConfirm: (tickers: string[]) => void
+  open: boolean; onClose: () => void; currentTicker: string
+  selected: string[]; onConfirm: (tickers: string[]) => void
 }) {
   const [search, setSearch] = useState('')
   const [pending, setPending] = useState<string[]>(selected)
@@ -416,9 +497,7 @@ function CompareModal({
     const q = search.toLowerCase()
     if (!q) return allTickers
     return allTickers.filter(
-      (t) =>
-        t.ticker.toLowerCase().includes(q) ||
-        (t.company_name ?? '').toLowerCase().includes(q),
+      (t) => t.ticker.toLowerCase().includes(q) || (t.company_name ?? '').toLowerCase().includes(q),
     )
   }, [allTickers, search])
 
@@ -508,7 +587,7 @@ function CompareModal({
 
 export default function Analysis() {
   const { ticker } = useParams<{ ticker: string }>()
-  const { fmt } = useCurrency()
+  const { fmt, convert } = useCurrency()
   const [searchParams, setSearchParams] = useSearchParams()
 
   // Core data
@@ -516,6 +595,7 @@ export default function Analysis() {
   const [fundamentals, setFundamentals] = useState<Fundamentals | null>(null)
   const [price, setPrice] = useState<number | null>(null)
   const [position, setPosition] = useState<PortfolioPos | null>(null)
+  const [analystData, setAnalystData] = useState<AnalystData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -543,6 +623,11 @@ export default function Analysis() {
   const [compareOpen, setCompareOpen] = useState(false)
   const [compareData, setCompareData] = useState<ColData[]>([])
 
+  // DCF sliders
+  const [dcfGrowthRate, setDcfGrowthRate] = useState(0.10)
+  const [dcfDiscountRate, setDcfDiscountRate] = useState(0.10)
+  const [dcfYears, setDcfYears] = useState(10)
+
   const compareTickers = useMemo(() => {
     const param = searchParams.get('compare')
     return param ? param.split(',').filter(Boolean).slice(0, 3) : []
@@ -557,19 +642,47 @@ export default function Analysis() {
     else setCompareData([])
   }, [compareTickers.join(',')])
 
+  // Seed DCF growth rate from fundamentals after load
+  useEffect(() => {
+    if (fundamentals?.earnings_growth_5y != null) {
+      const g = Math.min(Math.max(fundamentals.earnings_growth_5y, 0), 0.50)
+      setDcfGrowthRate(Math.round(g * 100) / 100)
+    }
+  }, [fundamentals?.earnings_growth_5y])
+
+  // DCF result
+  const dcfResult = useMemo<DCFResult | null>(() => {
+    const fcf = fundamentals?.free_cash_flow ?? null
+    const shares = fundamentals?.shares_outstanding ?? null
+    if (fcf == null || shares == null || shares <= 0 || fcf <= 0) return null
+    if (dcfDiscountRate <= 0.03) return null
+    return calculateDCF({ freeCashFlow: fcf, sharesOutstanding: shares, growthRate: dcfGrowthRate, discountRate: dcfDiscountRate, years: dcfYears })
+  }, [fundamentals, dcfGrowthRate, dcfDiscountRate, dcfYears])
+
+  const dcfChartData = useMemo(() => {
+    if (!dcfResult) return []
+    const cur = profile?.currency ?? 'USD'
+    return dcfResult.years.map((y) => ({
+      year: y.year,
+      fcfDescontado: convert(y.discountedFcf, cur),
+      vplAcumulado: convert(y.cumulativePv, cur),
+    }))
+  }, [dcfResult, profile?.currency, convert])
+
   // ----- Core data -----
   async function fetchAll() {
     setLoading(true)
     setError(null)
     const { data: { user } } = await supabase.auth.getUser()
 
-    const [profileRes, fundRes, priceRes, posRes] = await Promise.all([
+    const [profileRes, fundRes, priceRes, posRes, analystRes] = await Promise.all([
       supabase.from('stock_profiles').select('*').eq('ticker', ticker).maybeSingle(),
       supabase.from('stock_fundamentals').select('*').eq('ticker', ticker).maybeSingle(),
       supabase.from('stock_prices').select('price').eq('ticker', ticker).maybeSingle(),
       user
         ? supabase.from('portfolios').select('id, quantity, avg_price').eq('ticker', ticker!).eq('user_id', user.id).maybeSingle()
         : Promise.resolve({ data: null }),
+      supabase.from('analyst_data').select('*').eq('ticker', ticker).maybeSingle(),
     ])
 
     if (profileRes.error) { setError(profileRes.error.message); setLoading(false); return }
@@ -578,6 +691,7 @@ export default function Analysis() {
     setFundamentals(fundRes.data as Fundamentals | null)
     setPrice(priceRes.data?.price ?? null)
     setPosition(posRes.data as PortfolioPos | null)
+    setAnalystData(analystRes.data as AnalystData | null)
     setLoading(false)
   }
 
@@ -684,16 +798,12 @@ export default function Analysis() {
   }
 
   function handleCompareConfirm(tickers: string[]) {
-    if (tickers.length === 0) {
-      setSearchParams({}, { replace: true })
-    } else {
-      setSearchParams({ compare: tickers.join(',') }, { replace: true })
-    }
+    if (tickers.length === 0) setSearchParams({}, { replace: true })
+    else setSearchParams({ compare: tickers.join(',') }, { replace: true })
   }
 
   function handleRemoveCompare(t: string) {
-    const remaining = compareTickers.filter((c) => c !== t)
-    handleCompareConfirm(remaining)
+    handleCompareConfirm(compareTickers.filter((c) => c !== t))
   }
 
   // ----- Edit position -----
@@ -736,9 +846,22 @@ export default function Analysis() {
   const posPlAbs = calcPlAbs(posCurrentValue, posCostBasis)
   const posPlPct = calcPlPct(posCurrentValue, posCostBasis)
 
-  // Build comparison columns (current ticker is always col 0)
   const currentCol = buildColData(ticker!, profile, f, price)
   const allColumns: ColData[] = [currentCol, ...compareData]
+
+  const recChartData = analystData?.rec_history
+    ? [...analystData.rec_history].reverse().map((h) => ({
+        period: h.period === '0m' ? 'Atual' : h.period,
+        'Compra Forte': h.strongBuy ?? 0,
+        Compra: h.buy ?? 0,
+        Neutro: h.hold ?? 0,
+        Subperforma: h.sell ?? 0,
+        Venda: h.strongSell ?? 0,
+      }))
+    : []
+
+  const hasFcf = f?.free_cash_flow != null && f?.shares_outstanding != null
+  const fcfPositive = hasFcf && f!.free_cash_flow! > 0
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
@@ -789,6 +912,8 @@ export default function Analysis() {
         </Card>
       )}
 
+      {/* Analyst Insights */}
+      {analystData && (analystData.target_low != null || (analystData.rec_history && analystData.rec_history.length > 0)) && (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Graham Analysis */}
         <Card>
@@ -824,36 +949,272 @@ export default function Analysis() {
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Análise Bazin</CardTitle>
-              {signal && (
-                <Badge variant={signal === 'COMPRA' ? 'success' : 'danger'} className="text-sm px-3 py-1">
-                  {signal}
-                </Badge>
+              <CardTitle className="text-base">Insights de Analistas</CardTitle>
+              {analystData.updated_at && (
+                <span className="text-xs text-muted-foreground">
+                  Atualizado {new Date(analystData.updated_at).toLocaleDateString('pt-BR')}
+                </span>
               )}
             </div>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-lg border bg-muted/30 p-4">
-                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">Teto 8%</div>
-                <div className="text-2xl font-bold">{teto8 != null ? fmt(teto8, profile?.currency) : '-'}</div>
+          <CardContent className="space-y-6">
+            {/* Price Target Track */}
+            {analystData.target_low != null && analystData.target_high != null && (
+              <div>
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">
+                  Preço Alvo dos Analistas
+                </h4>
+                <PriceTargetTrack
+                  low={analystData.target_low}
+                  mean={analystData.target_mean}
+                  median={analystData.target_median}
+                  high={analystData.target_high}
+                  current={price}
+                  currency={profile?.currency ?? null}
+                />
               </div>
-              <div className="rounded-lg border bg-muted/30 p-4">
-                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">Teto 6%</div>
-                <div className="text-2xl font-bold">{teto6 != null ? fmt(teto6, profile?.currency) : '-'}</div>
+            )}
+
+            {/* Recommendation stacked bar chart */}
+            {recChartData.length > 0 && (
+              <div>
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">
+                  Recomendações de Analistas (últimos 4 meses)
+                </h4>
+                <ResponsiveContainer width="100%" height={160}>
+                  <BarChart data={recChartData} margin={{ top: 0, right: 8, left: -16, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="period" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                    <RechartsTooltip />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Bar dataKey="Compra Forte" stackId="a" fill="#22c55e" />
+                    <Bar dataKey="Compra"        stackId="a" fill="#86efac" />
+                    <Bar dataKey="Neutro"        stackId="a" fill="#eab308" />
+                    <Bar dataKey="Subperforma"   stackId="a" fill="#f97316" />
+                    <Bar dataKey="Venda"         stackId="a" fill="#ef4444" radius={[2, 2, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
-            </div>
-            <MetricRow label="Preço Atual" value={price != null ? fmt(price, profile?.currency) : '-'} />
-            <MetricRow label="Dividend Yield" value={f?.dividend_yield != null ? `${(f.dividend_yield * 100).toFixed(2)}%` : '-'} />
-            <MetricRow label="DPS" value={fmt(f?.dps, profile?.currency)} />
-            <MetricRow
-              label="Status"
-              value={signal ?? '-'}
-              color={signal === 'COMPRA' ? 'text-green-600' : signal === 'NÃO COMPRA' ? 'text-red-600' : ''}
-            />
+            )}
+
+            {/* Current rec summary counts */}
+            {(analystData.rec_strong_buy != null || analystData.rec_buy != null || analystData.rec_hold != null) && (
+              <div className="flex flex-wrap gap-x-5 gap-y-1">
+                {[
+                  { label: 'Compra Forte', value: analystData.rec_strong_buy, color: '#22c55e' },
+                  { label: 'Compra',       value: analystData.rec_buy,        color: '#86efac' },
+                  { label: 'Neutro',       value: analystData.rec_hold,       color: '#eab308' },
+                  { label: 'Subperforma',  value: analystData.rec_underperform, color: '#f97316' },
+                  { label: 'Venda',        value: analystData.rec_sell,       color: '#ef4444' },
+                ]
+                  .filter((r) => r.value != null)
+                  .map((r) => (
+                    <div key={r.label} className="flex items-center gap-1.5 text-sm">
+                      <div className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: r.color }} />
+                      <span className="text-muted-foreground">{r.label}:</span>
+                      <span className="font-semibold">{r.value}</span>
+                    </div>
+                  ))}
+              </div>
+            )}
           </CardContent>
         </Card>
-      </div>
+      )}
+
+      {/* Valuation Tabs: Graham | Bazin | DCF */}
+      <Tabs defaultValue="graham">
+        <TabsList className="mb-4">
+          <TabsTrigger value="graham">Graham</TabsTrigger>
+          <TabsTrigger value="bazin">Bazin</TabsTrigger>
+          <TabsTrigger value="dcf">DCF</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="graham">
+          <Card>
+            <CardHeader><CardTitle className="text-base">Análise Graham</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <SafetyIndicator value={margin} label="Margem de Segurança" />
+                <div className="rounded-lg border bg-muted/30 p-4">
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">V. Intrínseco</div>
+                  <div className="text-2xl font-bold">{intrinsic != null ? fmt(intrinsic, profile?.currency) : '-'}</div>
+                </div>
+                <div className="rounded-lg border bg-muted/30 p-4">
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">V. Justo</div>
+                  <div className="text-2xl font-bold">{fair != null ? fmt(fair, profile?.currency) : '-'}</div>
+                </div>
+                <div className="rounded-lg border bg-muted/30 p-4">
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">Upside</div>
+                  <div className={`text-2xl font-bold ${upside != null && upside > 0 ? 'text-green-600' : upside != null ? 'text-red-600' : ''}`}>
+                    {upside != null ? fmtPct(upside) : '-'}
+                  </div>
+                </div>
+              </div>
+              <div>
+                <MetricRow label="Seg. Juros de Mercado" value={marketSafety != null ? fmtPct(marketSafety) : '-'} color={marketSafety != null && marketSafety > 0 ? 'text-green-600' : 'text-red-600'} />
+                <MetricRow label="LPA (EPS)" value={fmtNumber(f?.eps)} />
+                <MetricRow label="VPA" value={fmtNumber(f?.book_value_per_share)} />
+                <MetricRow label="Lucros 5 Anos (g)" value={f?.earnings_growth_5y != null ? `${(f.earnings_growth_5y * 100).toFixed(1)}%` : '-'} />
+                <MetricRow label="Payout Médio" value={f?.payout_avg != null ? `${(f.payout_avg * 100).toFixed(1)}%` : '-'} />
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="bazin">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Análise Bazin</CardTitle>
+                {signal && (
+                  <Badge variant={signal === 'COMPRA' ? 'success' : 'danger'} className="text-sm px-3 py-1">
+                    {signal}
+                  </Badge>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-lg border bg-muted/30 p-4">
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">Teto 8%</div>
+                  <div className="text-2xl font-bold">{teto8 != null ? fmt(teto8, profile?.currency) : '-'}</div>
+                </div>
+                <div className="rounded-lg border bg-muted/30 p-4">
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">Teto 6%</div>
+                  <div className="text-2xl font-bold">{teto6 != null ? fmt(teto6, profile?.currency) : '-'}</div>
+                </div>
+              </div>
+              <MetricRow label="Preço Atual" value={price != null ? fmt(price, profile?.currency) : '-'} />
+              <MetricRow label="Dividend Yield" value={f?.dividend_yield != null ? `${(f.dividend_yield * 100).toFixed(2)}%` : '-'} />
+              <MetricRow label="DPS" value={fmt(f?.dps, profile?.currency)} />
+              <MetricRow
+                label="Status"
+                value={signal ?? '-'}
+                color={signal === 'COMPRA' ? 'text-green-600' : signal === 'NÃO COMPRA' ? 'text-red-600' : ''}
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="dcf">
+          <Card>
+            <CardHeader><CardTitle className="text-base">Fluxo de Caixa Descontado (DCF)</CardTitle></CardHeader>
+            <CardContent className="space-y-5">
+              {/* FCF unavailable */}
+              {!hasFcf && (
+                <div className="flex items-start gap-2 rounded-md bg-muted/50 border p-4 text-sm text-muted-foreground">
+                  <Info className="h-4 w-4 mt-0.5 shrink-0" />
+                  <span>Dados de FCF ou ações em circulação indisponíveis para este ticker. Execute o script de atualização com o modo <code className="bg-muted px-1 rounded">fundamentals</code> para preencher esses dados.</span>
+                </div>
+              )}
+
+              {/* FCF ≤ 0 */}
+              {hasFcf && !fcfPositive && (
+                <div className="flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 p-4 text-sm text-amber-800">
+                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                  <span>FCF negativo ({fmtLargeNumber(f!.free_cash_flow)}). O modelo DCF requer FCF positivo para produzir resultados confiáveis.</span>
+                </div>
+              )}
+
+              {/* Sliders + chart (only when FCF is valid) */}
+              {hasFcf && fcfPositive && (
+                <>
+                  {/* Sliders */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <Label className="text-xs">Taxa de Crescimento (g)</Label>
+                        <span className="text-xs font-semibold text-primary">{Math.round(dcfGrowthRate * 100)}%</span>
+                      </div>
+                      <input
+                        type="range" min={0} max={50} step={1}
+                        value={Math.round(dcfGrowthRate * 100)}
+                        onChange={(e) => setDcfGrowthRate(parseInt(e.target.value) / 100)}
+                        className="w-full h-1.5 accent-primary cursor-pointer"
+                      />
+                      <div className="flex justify-between text-xs text-muted-foreground"><span>0%</span><span>50%</span></div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <Label className="text-xs">Taxa de Desconto (r)</Label>
+                        <span className="text-xs font-semibold text-primary">{Math.round(dcfDiscountRate * 100)}%</span>
+                      </div>
+                      <input
+                        type="range" min={5} max={20} step={1}
+                        value={Math.round(dcfDiscountRate * 100)}
+                        onChange={(e) => setDcfDiscountRate(parseInt(e.target.value) / 100)}
+                        className="w-full h-1.5 accent-primary cursor-pointer"
+                      />
+                      <div className="flex justify-between text-xs text-muted-foreground"><span>5%</span><span>20%</span></div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <Label className="text-xs">Horizonte</Label>
+                        <span className="text-xs font-semibold text-primary">{dcfYears} anos</span>
+                      </div>
+                      <input
+                        type="range" min={5} max={20} step={1}
+                        value={dcfYears}
+                        onChange={(e) => setDcfYears(parseInt(e.target.value))}
+                        className="w-full h-1.5 accent-primary cursor-pointer"
+                      />
+                      <div className="flex justify-between text-xs text-muted-foreground"><span>5</span><span>20</span></div>
+                    </div>
+                  </div>
+
+                  {/* Results */}
+                  {dcfResult && (
+                    <>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        <div className="rounded-lg border bg-muted/30 p-3">
+                          <div className="text-xs text-muted-foreground mb-1">Valor Intrínseco / Ação</div>
+                          <div className="text-xl font-bold">{fmt(dcfResult.intrinsicPerShare, profile?.currency)}</div>
+                        </div>
+                        <div className="rounded-lg border bg-muted/30 p-3">
+                          <div className="text-xs text-muted-foreground mb-1">Upside vs Preço Atual</div>
+                          {price != null ? (() => {
+                            const u = calcUpside(dcfResult.intrinsicPerShare, price)
+                            return (
+                              <div className={`text-xl font-bold ${(u ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {u != null ? fmtPct(u) : '-'}
+                              </div>
+                            )
+                          })() : <div className="text-xl font-bold">-</div>}
+                        </div>
+                        <div className="rounded-lg border bg-muted/30 p-3">
+                          <div className="text-xs text-muted-foreground mb-1">% Valor Terminal</div>
+                          <div className="text-xl font-bold">
+                            {((dcfResult.terminalValue / dcfResult.pv) * 100).toFixed(1)}%
+                          </div>
+                        </div>
+                      </div>
+
+                      <ResponsiveContainer width="100%" height={220}>
+                        <ComposedChart data={dcfChartData} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                          <XAxis dataKey="year" tick={{ fontSize: 10 }} label={{ value: 'Ano', position: 'insideBottom', offset: -2, fontSize: 10 }} height={30} />
+                          <YAxis yAxisId="left"  tickFormatter={fmtLargeNumber} tick={{ fontSize: 10 }} />
+                          <YAxis yAxisId="right" orientation="right" tickFormatter={fmtLargeNumber} tick={{ fontSize: 10 }} />
+                          <RechartsTooltip formatter={(v) => fmtLargeNumber(v as number)} />
+                          <Legend wrapperStyle={{ fontSize: 11 }} />
+                          <Bar    yAxisId="left"  dataKey="fcfDescontado" name="FCF Descontado" fill="#3b82f6" opacity={0.8} radius={[3, 3, 0, 0]} />
+                          <Line   yAxisId="right" type="monotone" dataKey="vplAcumulado" name="VPL Acumulado" stroke="#f59e0b" dot={false} strokeWidth={2} />
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                      <p className="text-xs text-muted-foreground">
+                        Taxa perpétua de crescimento fixada em 3% (Gordon Growth Model). FCF e valor intrínseco em moeda nativa do ticker.
+                      </p>
+                    </>
+                  )}
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
 
       {/* Key Ratios */}
       <Card>
@@ -950,9 +1311,7 @@ export default function Analysis() {
                 <tbody className="divide-y">
                   {alerts.map((a) => (
                     <tr key={a.id} className="hover:bg-muted/20">
-                      <td className="px-3 py-2 text-xs">
-                        {a.direction === 'above' ? '↑ Acima' : '↓ Abaixo'}
-                      </td>
+                      <td className="px-3 py-2 text-xs">{a.direction === 'above' ? '↑ Acima' : '↓ Abaixo'}</td>
                       <td className="px-3 py-2 text-xs font-mono">{fmt(a.target_price, profile?.currency)}</td>
                       <td className="px-3 py-2 text-xs text-muted-foreground">
                         {new Date(a.created_at).toLocaleDateString('pt-BR')}
