@@ -7,9 +7,9 @@ import {
   calcBazinSignal,
   calcIntrinsicValue,
   calcFairValue,
-  calcUpside,
-  calcMarketSafety,
   calcMarginOfSafety,
+  calcIntrinsicUpside,
+  calcFairValueUpside,
   fmtNumber,
   fmtPct,
 } from '@/lib/calculations'
@@ -202,8 +202,8 @@ export default function Screener() {
       signal: calcBazinSignal(r.dividend_yield, r.price),
       intrinsic: calcIntrinsicValue(r.eps, r.book_value_per_share),
       fair: calcFairValue(r.eps, r.earnings_growth_5y),
-      upside: calcUpside(calcIntrinsicValue(r.eps, r.book_value_per_share), r.price),
-      marketSafety: calcMarketSafety(calcFairValue(r.eps, r.earnings_growth_5y), r.price),
+      upside: calcIntrinsicUpside(calcIntrinsicValue(r.eps, r.book_value_per_share), r.price),
+      marketSafety: calcMarginOfSafety(calcFairValue(r.eps, r.earnings_growth_5y), r.price),
       margin: calcMarginOfSafety(calcIntrinsicValue(r.eps, r.book_value_per_share), r.price),
       dyPct: r.dividend_yield != null ? r.dividend_yield * 100 : null,
     }))

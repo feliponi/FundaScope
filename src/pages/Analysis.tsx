@@ -7,7 +7,6 @@ import {
   calcBazinSignal,
   calcIntrinsicValue,
   calcFairValue,
-  // IMPORTAÇÕES CORRIGIDAS ABAIXO:
   calcIntrinsicUpside,  
   calcFairValueUpside,
   calcMarginOfSafety,
@@ -153,7 +152,7 @@ function SafetyIndicator({ value, label }: { value: number | null; label: string
   return (
     <div className={`rounded-lg border p-4 ${colorClass}`}>
       <div className="text-xs font-medium uppercase tracking-wide mb-1">{label}</div>
-      <div className="text-2xl font-bold">{value != null ? `${value.toFixed(1)}%` : '-'}</div>
+      <div className="text-2xl font-bold">{value != null ? `${(value * 100).toFixed(1)}%` : '-'}</div>
     </div>
   )
 }
@@ -231,8 +230,7 @@ const COMPARISON_METRICS: MetricDef[] = [
   // Graham
   { section: 'Análise Graham', label: 'V. Intrínseco', get: (d) => d.intrinsic, renderCell: (d, f) => f(d.intrinsic, d.currency), higherBetter: true },
   { label: 'V. Justo', get: (d) => d.fair, renderCell: (d, f) => f(d.fair, d.currency), higherBetter: true },
-  { label: 'Margem Seg. %', get: (d) => d.marginOfSafety, renderCell: (d) => d.marginOfSafety != null ? `${d.marginOfSafety.toFixed(1)}%` : '—', higherBetter: true },
-  { label: 'Seg. Juros Merc. %', get: (d) => d.marketSafety, renderCell: (d) => d.marketSafety != null ? fmtPct(d.marketSafety) : '—', higherBetter: true },
+  { label: 'Margem Seg. %', get: (d) => d.marginOfSafety, renderCell: (d) => d.marginOfSafety != null ? `${(d.marginOfSafety * 100).toFixed(1)}%` : '—', higherBetter: true },
   { label: 'Teto 8% (Bazin)', get: (d) => d.teto8, renderCell: (d, f) => f(d.teto8, d.currency) },
   { label: 'Teto 6% (Bazin)', get: (d) => d.teto6, renderCell: (d, f) => f(d.teto6, d.currency) },
   {
