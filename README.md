@@ -46,10 +46,9 @@ Edit `.env` and fill in:
 
 | Variable | Where to find it |
 |---|---|
-| `VITE_SUPABASE_URL` | Supabase Dashboard → Settings → API → Project URL |
-| `VITE_SUPABASE_ANON_KEY` | Supabase Dashboard → Settings → API → anon public key |
-| `SUPABASE_URL` | Same as above (used by the Python script) |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase Dashboard → Settings → API → service_role secret key |
+| `SUPABASE_URL` | Supabase Dashboard → Settings → API → Project URL |
+| `SUPABASE_ANON_KEY` | Supabase Dashboard → Settings → API → anon public key |
+
 
 > **Security note:** `SUPABASE_SERVICE_ROLE_KEY` bypasses Row Level Security. Never expose it to
 > the browser. Keep it in `.env` (which is git-ignored).
