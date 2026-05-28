@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, NavLink, useNavigate } from 'react-router-dom'
-import { supabase } from '@/lib/supabase'
+import { supabase, supabaseReady } from '@/lib/supabase'
 import type { Session } from '@supabase/supabase-js'
 import Login from '@/pages/Login'
 import Screener from '@/pages/Screener'
@@ -96,8 +96,34 @@ function AppRoutes({ session }: { session: Session | null }) {
   )
 }
 
+function ConfigError() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+      <div className="max-w-md w-full rounded-lg border bg-white shadow p-8 space-y-4">
+        <h1 className="text-xl font-bold text-destructive">Configuração incompleta</h1>
+        <p className="text-sm text-muted-foreground">
+          As variáveis de ambiente do Supabase não foram encontradas. Crie um arquivo{' '}
+          <code className="bg-muted px-1 rounded">.env</code> na raiz do projeto com:
+        </p>
+        <pre className="bg-muted rounded p-4 text-xs overflow-auto">
+{`SUPABASE_URL=https://xxxx.supabase.co
+SUPABASE_ANON_KEY=eyJ...      # anon/public key
+SUPABASE_SERVICE_ROLE_KEY=eyJ... # service_role key (admin script only)`}
+        </pre>
+        <p className="text-xs text-muted-foreground">
+          As chaves estão em{' '}
+          <strong>Supabase Dashboard → Project Settings → API</strong>.
+          Após editar o <code className="bg-muted px-1 rounded">.env</code>, reinicie o servidor de desenvolvimento.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined)
+
+  if (!supabaseReady) return <ConfigError />
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
