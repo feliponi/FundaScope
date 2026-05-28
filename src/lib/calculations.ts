@@ -310,6 +310,63 @@ export type DividendRow = {
   monthly_div: number | null // native currency
 }
 
+// ---------------------------------------------------------------------------
+// DCF — Discounted Cash Flow (Gordon Growth Model terminal value)
+// ---------------------------------------------------------------------------
+
+export type DCFInputs = {
+  freeCashFlow: number       // latest annual FCF in native currency
+  sharesOutstanding: number
+  growthRate: number         // decimal, e.g. 0.10 for 10%
+  discountRate: number       // decimal, e.g. 0.10 for 10%
+  years: number              // integer projection horizon
+}
+
+export type DCFResult = {
+  pv: number                 // total present value (FCF years + terminal)
+  terminalValue: number      // PV of terminal value
+  intrinsicPerShare: number  // pv / sharesOutstanding, native currency
+  years: Array<{
+    year: number
+    fcf: number              // projected FCF for this year
+    discountedFcf: number    // PV of that FCF
+    cumulativePv: number     // running sum of discounted FCFs so far
+  }>
+}
+
+const TERMINAL_GROWTH_RATE = 0.03
+
+/**
+ * DCF intrinsic value using Gordon Growth Model terminal value.
+ * Returns null when discount rate ≤ terminal growth rate (3%) or inputs are invalid.
+ */
+export function calculateDCF(inputs: DCFInputs): DCFResult | null {
+  const { freeCashFlow, sharesOutstanding, growthRate, discountRate, years } = inputs
+  if (!isValid(freeCashFlow, sharesOutstanding, growthRate, discountRate, years)) return null
+  if (sharesOutstanding <= 0 || discountRate <= TERMINAL_GROWTH_RATE) return null
+
+  const yearRows: DCFResult['years'] = []
+  let cumulativePv = 0
+
+  for (let y = 1; y <= years; y++) {
+    const fcf = freeCashFlow * Math.pow(1 + growthRate, y)
+    const discountedFcf = fcf / Math.pow(1 + discountRate, y)
+    cumulativePv += discountedFcf
+    yearRows.push({ year: y, fcf, discountedFcf, cumulativePv })
+  }
+
+  const terminalFcf = freeCashFlow * Math.pow(1 + growthRate, years + 1)
+  const terminalValue = terminalFcf / ((discountRate - TERMINAL_GROWTH_RATE) * Math.pow(1 + discountRate, years))
+  const totalPv = cumulativePv + terminalValue
+
+  return {
+    pv: totalPv,
+    terminalValue,
+    intrinsicPerShare: totalPv / sharesOutstanding,
+    years: yearRows,
+  }
+}
+
 /**
  * Compute per-ticker annual/monthly dividend estimates from portfolio positions.
  * All monetary values are in each ticker's native currency; callers convert for display.
