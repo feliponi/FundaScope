@@ -302,3 +302,24 @@ ALTER TABLE analyst_data ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "analyst_data_select_authenticated"
   ON analyst_data FOR SELECT TO authenticated USING (true);
+
+-- ============================================================
+-- FEATURE 5 — SIMULATOR FAVORITES
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS simulator_favorites (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  ticker      TEXT NOT NULL,
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, ticker)
+);
+
+ALTER TABLE simulator_favorites ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "simulator_favorites_select_own"
+  ON simulator_favorites FOR SELECT TO authenticated USING (user_id = auth.uid());
+CREATE POLICY "simulator_favorites_insert_own"
+  ON simulator_favorites FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid());
+CREATE POLICY "simulator_favorites_delete_own"
+  ON simulator_favorites FOR DELETE TO authenticated USING (user_id = auth.uid());
