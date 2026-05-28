@@ -15,11 +15,11 @@ import {
   calcCostBasis,
   calcPlAbs,
   calcPlPct,
-  fmtCurrency,
   fmtPct,
   fmtNumber,
   fmtLargeNumber,
 } from '@/lib/calculations'
+import { useCurrency } from '@/lib/currency'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -109,6 +109,7 @@ function SafetyIndicator({ value, label }: { value: number | null; label: string
 
 export default function Analysis() {
   const { ticker } = useParams<{ ticker: string }>()
+  const { fmt } = useCurrency()
   const [profile, setProfile] = useState<Profile | null>(null)
   const [fundamentals, setFundamentals] = useState<Fundamentals | null>(null)
   const [price, setPrice] = useState<number | null>(null)
@@ -212,7 +213,7 @@ export default function Analysis() {
           </div>
         </div>
         <div className="text-right">
-          {price != null && <div className="text-3xl font-bold">{fmtCurrency(price, profile?.currency ?? 'BRL')}</div>}
+          {price != null && <div className="text-3xl font-bold">{fmt(price, profile?.currency ?? 'USD')}</div>}
           {f?.dividend_yield != null && <div className="text-muted-foreground">DY: {(f.dividend_yield * 100).toFixed(2)}%</div>}
         </div>
       </div>
@@ -243,11 +244,11 @@ export default function Analysis() {
               <SafetyIndicator value={margin} label="Margem de Segurança" />
               <div className="rounded-lg border bg-muted/30 p-4">
                 <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">V. Intrínseco</div>
-                <div className="text-2xl font-bold">{intrinsic != null ? fmtCurrency(intrinsic, profile?.currency) : '-'}</div>
+                <div className="text-2xl font-bold">{intrinsic != null ? fmt(intrinsic, profile?.currency) : '-'}</div>
               </div>
               <div className="rounded-lg border bg-muted/30 p-4">
                 <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">V. Justo</div>
-                <div className="text-2xl font-bold">{fair != null ? fmtCurrency(fair, profile?.currency) : '-'}</div>
+                <div className="text-2xl font-bold">{fair != null ? fmt(fair, profile?.currency) : '-'}</div>
               </div>
               <div className="rounded-lg border bg-muted/30 p-4">
                 <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">Upside</div>
@@ -282,16 +283,16 @@ export default function Analysis() {
             <div className="grid grid-cols-2 gap-3">
               <div className="rounded-lg border bg-muted/30 p-4">
                 <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">Teto 8%</div>
-                <div className="text-2xl font-bold">{teto8 != null ? fmtCurrency(teto8, profile?.currency) : '-'}</div>
+                <div className="text-2xl font-bold">{teto8 != null ? fmt(teto8, profile?.currency) : '-'}</div>
               </div>
               <div className="rounded-lg border bg-muted/30 p-4">
                 <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">Teto 6%</div>
-                <div className="text-2xl font-bold">{teto6 != null ? fmtCurrency(teto6, profile?.currency) : '-'}</div>
+                <div className="text-2xl font-bold">{teto6 != null ? fmt(teto6, profile?.currency) : '-'}</div>
               </div>
             </div>
-            <MetricRow label="Preço Atual" value={price != null ? fmtCurrency(price, profile?.currency) : '-'} />
+            <MetricRow label="Preço Atual" value={price != null ? fmt(price, profile?.currency) : '-'} />
             <MetricRow label="Dividend Yield" value={f?.dividend_yield != null ? `${(f.dividend_yield * 100).toFixed(2)}%` : '-'} />
-            <MetricRow label="DPS" value={fmtCurrency(f?.dps, profile?.currency)} />
+            <MetricRow label="DPS" value={fmt(f?.dps, profile?.currency)} />
             <MetricRow
               label="Status"
               value={signal ?? '-'}
@@ -382,9 +383,9 @@ export default function Analysis() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               {[
                 { label: 'Quantidade', value: String(position.quantity) },
-                { label: 'Preço Médio', value: fmtCurrency(position.avg_price, profile?.currency) },
-                { label: 'Valor Atual', value: posCurrentValue != null ? fmtCurrency(posCurrentValue, profile?.currency) : '-' },
-                { label: 'Custo Total', value: posCostBasis != null ? fmtCurrency(posCostBasis, profile?.currency) : '-' },
+                { label: 'Preço Médio', value: fmt(position.avg_price, profile?.currency) },
+                { label: 'Valor Atual', value: posCurrentValue != null ? fmt(posCurrentValue, profile?.currency) : '-' },
+                { label: 'Custo Total', value: posCostBasis != null ? fmt(posCostBasis, profile?.currency) : '-' },
               ].map((c) => (
                 <div key={c.label} className="rounded-lg border bg-muted/30 p-3">
                   <div className="text-xs text-muted-foreground mb-1">{c.label}</div>
@@ -395,7 +396,7 @@ export default function Analysis() {
             <div className="mt-4 flex items-center gap-6">
               <div className={`flex items-center gap-1 text-lg font-bold ${(posPlAbs ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                 {(posPlAbs ?? 0) >= 0 ? <TrendingUp className="h-5 w-5" /> : <TrendingDown className="h-5 w-5" />}
-                P&L: {posPlAbs != null ? fmtCurrency(posPlAbs, profile?.currency) : '-'} ({posPlPct != null ? fmtPct(posPlPct) : '-'})
+                P&L: {posPlAbs != null ? fmt(posPlAbs, profile?.currency) : '-'} ({posPlPct != null ? fmtPct(posPlPct) : '-'})
               </div>
             </div>
           </CardContent>

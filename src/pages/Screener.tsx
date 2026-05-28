@@ -12,8 +12,8 @@ import {
   calcMarginOfSafety,
   fmtNumber,
   fmtPct,
-  fmtCurrency,
 } from '@/lib/calculations'
+import { useCurrency } from '@/lib/currency'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -111,6 +111,8 @@ export default function Screener() {
 
   // Pagination
   const [page, setPage] = useState(0)
+
+  const { fmt } = useCurrency()
 
   // Add ticker modal
   const [modalOpen, setModalOpen] = useState(false)
@@ -395,9 +397,9 @@ export default function Screener() {
                       </Link>
                     </td>
                     <td className="px-3 py-2 text-muted-foreground max-w-[180px] truncate">{r.company_name ?? '-'}</td>
-                    <td className="px-3 py-2">{r.price != null ? fmtCurrency(r.price, r.currency) : '-'}</td>
-                    <td className="px-3 py-2">{r.has_fundamentals ? (r.teto8 != null ? fmtCurrency(r.teto8, r.currency) : '-') : '-'}</td>
-                    <td className="px-3 py-2">{r.has_fundamentals ? (r.teto6 != null ? fmtCurrency(r.teto6, r.currency) : '-') : '-'}</td>
+                    <td className="px-3 py-2">{r.price != null ? fmt(r.price, r.currency) : '-'}</td>
+                    <td className="px-3 py-2">{r.has_fundamentals ? (r.teto8 != null ? fmt(r.teto8, r.currency) : '-') : '-'}</td>
+                    <td className="px-3 py-2">{r.has_fundamentals ? (r.teto6 != null ? fmt(r.teto6, r.currency) : '-') : '-'}</td>
                     <td className="px-3 py-2">
                       {r.has_fundamentals && r.signal ? (
                         <Badge variant={r.signal === 'COMPRA' ? 'success' : 'danger'}>
@@ -459,9 +461,9 @@ export default function Screener() {
                           {r.ticker}
                         </Link>
                       </td>
-                      <td className="px-3 py-2">{r.price != null ? fmtCurrency(r.price, r.currency) : dash}</td>
-                      <td className="px-3 py-2">{noData ? dash : (r.intrinsic != null ? fmtCurrency(r.intrinsic, r.currency) : dash)}</td>
-                      <td className="px-3 py-2">{noData ? dash : (r.fair != null ? fmtCurrency(r.fair, r.currency) : dash)}</td>
+                      <td className="px-3 py-2">{r.price != null ? fmt(r.price, r.currency) : dash}</td>
+                      <td className="px-3 py-2">{noData ? dash : (r.intrinsic != null ? fmt(r.intrinsic, r.currency) : dash)}</td>
+                      <td className="px-3 py-2">{noData ? dash : (r.fair != null ? fmt(r.fair, r.currency) : dash)}</td>
                       <td className="px-3 py-2">{noData ? dash : (r.payout_avg != null ? `${(r.payout_avg * 100).toFixed(1)}%` : dash)}</td>
                       <td className={`px-3 py-2 ${r.marketSafety != null && r.marketSafety > 0 ? 'text-green-600' : r.marketSafety != null ? 'text-red-600' : ''}`}>
                         {noData ? dash : (r.marketSafety != null ? fmtPct(r.marketSafety) : dash)}
