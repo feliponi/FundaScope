@@ -28,7 +28,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { ChevronUp, ChevronDown, ChevronsUpDown, Plus, Filter, ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronUp, ChevronDown, ChevronsUpDown, Plus, Filter, ChevronLeft, ChevronRight, StickyNote } from 'lucide-react'
 
 type ScreenerRow = {
   ticker: string
@@ -113,6 +113,7 @@ export default function Screener() {
   const [page, setPage] = useState(0)
 
   const { fmt } = useCurrency()
+  const [notedTickers, setNotedTickers] = useState<Set<string>>(new Set())
 
   // Add ticker modal
   const [modalOpen, setModalOpen] = useState(false)
@@ -120,7 +121,12 @@ export default function Screener() {
   const [addStatus, setAddStatus] = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
   const [addLoading, setAddLoading] = useState(false)
 
-  useEffect(() => { fetchData() }, [])
+  useEffect(() => { fetchData(); fetchNotes() }, [])
+
+  async function fetchNotes() {
+    const { data } = await supabase.from('ticker_notes').select('ticker')
+    if (data) setNotedTickers(new Set(data.map((r) => r.ticker)))
+  }
 
   async function fetchData() {
     setLoading(true)
@@ -392,9 +398,16 @@ export default function Screener() {
                 {pageRows.map((r) => (
                   <tr key={r.ticker} className="hover:bg-muted/30 transition-colors">
                     <td className="px-3 py-2 font-medium">
-                      <Link to={`/analysis/${r.ticker}`} className="text-primary hover:underline">
-                        {r.ticker}
-                      </Link>
+                      <span className="inline-flex items-center gap-1">
+                        <Link to={`/analysis/${r.ticker}`} className="text-primary hover:underline">
+                          {r.ticker}
+                        </Link>
+                        {notedTickers.has(r.ticker) && (
+                          <Link to={`/analysis/${r.ticker}`} title="Tem nota">
+                            <StickyNote className="h-3 w-3 text-amber-500" />
+                          </Link>
+                        )}
+                      </span>
                     </td>
                     <td className="px-3 py-2 text-muted-foreground max-w-[180px] truncate">{r.company_name ?? '-'}</td>
                     <td className="px-3 py-2">{r.price != null ? fmt(r.price, r.currency) : '-'}</td>
@@ -457,9 +470,16 @@ export default function Screener() {
                   return (
                     <tr key={r.ticker} className="hover:bg-muted/30 transition-colors">
                       <td className="px-3 py-2 font-medium">
-                        <Link to={`/analysis/${r.ticker}`} className="text-primary hover:underline">
-                          {r.ticker}
-                        </Link>
+                        <span className="inline-flex items-center gap-1">
+                          <Link to={`/analysis/${r.ticker}`} className="text-primary hover:underline">
+                            {r.ticker}
+                          </Link>
+                          {notedTickers.has(r.ticker) && (
+                            <Link to={`/analysis/${r.ticker}`} title="Tem nota">
+                              <StickyNote className="h-3 w-3 text-amber-500" />
+                            </Link>
+                          )}
+                        </span>
                       </td>
                       <td className="px-3 py-2">{r.price != null ? fmt(r.price, r.currency) : dash}</td>
                       <td className="px-3 py-2">{noData ? dash : (r.intrinsic != null ? fmt(r.intrinsic, r.currency) : dash)}</td>

@@ -179,3 +179,96 @@ CREATE POLICY "portfolios_delete_own"
 
 CREATE INDEX IF NOT EXISTS idx_portfolios_user_id ON portfolios (user_id);
 CREATE INDEX IF NOT EXISTS idx_tickers_last_update ON tickers (last_update);
+
+-- ============================================================
+-- FEATURE 1 — PRICE ALERTS
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS price_alerts (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id       UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  ticker        TEXT NOT NULL,
+  target_price  NUMERIC NOT NULL,
+  direction     TEXT NOT NULL CHECK (direction IN ('above', 'below')),
+  is_active     BOOLEAN DEFAULT TRUE,
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, ticker, direction)
+);
+
+CREATE TABLE IF NOT EXISTS alerts_triggered (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  ticker          TEXT NOT NULL,
+  target_price    NUMERIC NOT NULL,
+  triggered_price NUMERIC NOT NULL,
+  direction       TEXT NOT NULL,
+  triggered_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE price_alerts     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE alerts_triggered ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "price_alerts_select_own"
+  ON price_alerts FOR SELECT TO authenticated USING (user_id = auth.uid());
+CREATE POLICY "price_alerts_insert_own"
+  ON price_alerts FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid());
+CREATE POLICY "price_alerts_update_own"
+  ON price_alerts FOR UPDATE TO authenticated
+  USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY "price_alerts_delete_own"
+  ON price_alerts FOR DELETE TO authenticated USING (user_id = auth.uid());
+
+-- alerts_triggered: SELECT and DELETE by owner; INSERT is service role only (no policy = blocked for authenticated)
+CREATE POLICY "alerts_triggered_select_own"
+  ON alerts_triggered FOR SELECT TO authenticated USING (user_id = auth.uid());
+CREATE POLICY "alerts_triggered_delete_own"
+  ON alerts_triggered FOR DELETE TO authenticated USING (user_id = auth.uid());
+
+-- ============================================================
+-- FEATURE 2 — TICKER NOTES
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS ticker_notes (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  ticker      TEXT NOT NULL,
+  content     TEXT NOT NULL,
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ticker_notes_user_ticker ON ticker_notes(user_id, ticker);
+
+ALTER TABLE ticker_notes ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "ticker_notes_select_own"
+  ON ticker_notes FOR SELECT TO authenticated USING (user_id = auth.uid());
+CREATE POLICY "ticker_notes_insert_own"
+  ON ticker_notes FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid());
+CREATE POLICY "ticker_notes_update_own"
+  ON ticker_notes FOR UPDATE TO authenticated
+  USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+CREATE POLICY "ticker_notes_delete_own"
+  ON ticker_notes FOR DELETE TO authenticated USING (user_id = auth.uid());
+
+-- ============================================================
+-- FEATURE 3 — PORTFOLIO SNAPSHOTS
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id       UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  total_value   NUMERIC NOT NULL,
+  total_cost    NUMERIC NOT NULL,
+  snapshot_date DATE NOT NULL,
+  UNIQUE(user_id, snapshot_date)
+);
+
+ALTER TABLE portfolio_snapshots ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "portfolio_snapshots_select_own"
+  ON portfolio_snapshots FOR SELECT TO authenticated USING (user_id = auth.uid());
+-- INSERT/UPDATE is service role only (admin script bypasses RLS)
+
+CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_user_date
+  ON portfolio_snapshots (user_id, snapshot_date);
