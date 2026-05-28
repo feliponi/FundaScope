@@ -837,6 +837,7 @@ export default function Analysis() {
   const fair = calcFairValue(f?.eps, f?.earnings_growth_5y)
   const upside = calcIntrinsicUpside(intrinsic, price)
   const marginofSafety = calcMarginOfSafety(fair, price)
+  const fairValueUpside = calcFairValueUpside(fair, price)
   const teto8 = calcTeto8(f?.dividend_yield, price)
   const teto6 = calcTeto6(f?.dividend_yield, price)
   const signal = calcBazinSignal(f?.dividend_yield, price)
@@ -914,38 +915,6 @@ export default function Analysis() {
 
       {/* Analyst Insights */}
       {analystData && (analystData.target_low != null || (analystData.rec_history && analystData.rec_history.length > 0)) && (
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Graham Analysis */}
-        <Card>
-          <CardHeader><CardTitle className="text-base">Análise Graham</CardTitle></CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <SafetyIndicator value={marginofSafety} label="Margem de Segurança" />
-              <div className="rounded-lg border bg-muted/30 p-4">
-                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">V. Intrínseco</div>
-                <div className="text-2xl font-bold">{intrinsic != null ? fmt(intrinsic, profile?.currency) : '-'}</div>
-              </div>
-              <div className="rounded-lg border bg-muted/30 p-4">
-                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">V. Justo</div>
-                <div className="text-2xl font-bold">{fair != null ? fmt(fair, profile?.currency) : '-'}</div>
-              </div>
-              <div className="rounded-lg border bg-muted/30 p-4">
-                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">Upside</div>
-                <div className={`text-2xl font-bold ${upside != null && upside > 0 ? 'text-green-600' : upside != null ? 'text-red-600' : ''}`}>
-                  {upside != null ? fmtPct(upside) : '-'}
-                </div>
-              </div>
-            </div>
-            <div>
-              <MetricRow label="LPA (EPS)" value={fmtNumber(f?.eps)} />
-              <MetricRow label="VPA" value={fmtNumber(f?.book_value_per_share)} />
-              <MetricRow label="Lucros 5 Anos (g)" value={f?.earnings_growth_5y != null ? `${(f.earnings_growth_5y * 100).toFixed(1)}%` : '-'} />
-              <MetricRow label="Payout Médio" value={f?.payout_avg != null ? `${(f.payout_avg * 100).toFixed(1)}%` : '-'} />
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Bazin Analysis */}
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -1002,11 +971,11 @@ export default function Analysis() {
             {(analystData.rec_strong_buy != null || analystData.rec_buy != null || analystData.rec_hold != null) && (
               <div className="flex flex-wrap gap-x-5 gap-y-1">
                 {[
-                  { label: 'Compra Forte', value: analystData.rec_strong_buy, color: '#22c55e' },
-                  { label: 'Compra',       value: analystData.rec_buy,        color: '#86efac' },
-                  { label: 'Neutro',       value: analystData.rec_hold,       color: '#eab308' },
+                  { label: 'Compra Forte', value: analystData.rec_strong_buy,   color: '#22c55e' },
+                  { label: 'Compra',       value: analystData.rec_buy,          color: '#86efac' },
+                  { label: 'Neutro',       value: analystData.rec_hold,         color: '#eab308' },
                   { label: 'Subperforma',  value: analystData.rec_underperform, color: '#f97316' },
-                  { label: 'Venda',        value: analystData.rec_sell,       color: '#ef4444' },
+                  { label: 'Venda',        value: analystData.rec_sell,         color: '#ef4444' },
                 ]
                   .filter((r) => r.value != null)
                   .map((r) => (
@@ -1035,7 +1004,7 @@ export default function Analysis() {
             <CardHeader><CardTitle className="text-base">Análise Graham</CardTitle></CardHeader>
             <CardContent className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
-                <SafetyIndicator value={margin} label="Margem de Segurança" />
+                <SafetyIndicator value={marginofSafety} label="Margem de Segurança" />
                 <div className="rounded-lg border bg-muted/30 p-4">
                   <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">V. Intrínseco</div>
                   <div className="text-2xl font-bold">{intrinsic != null ? fmt(intrinsic, profile?.currency) : '-'}</div>
@@ -1052,7 +1021,7 @@ export default function Analysis() {
                 </div>
               </div>
               <div>
-                <MetricRow label="Seg. Juros de Mercado" value={marketSafety != null ? fmtPct(marketSafety) : '-'} color={marketSafety != null && marketSafety > 0 ? 'text-green-600' : 'text-red-600'} />
+                <MetricRow label="Seg. Juros de Mercado" value={fairValueUpside != null ? fmtPct(fairValueUpside) : '-'} color={fairValueUpside != null && fairValueUpside > 0 ? 'text-green-600' : 'text-red-600'} />
                 <MetricRow label="LPA (EPS)" value={fmtNumber(f?.eps)} />
                 <MetricRow label="VPA" value={fmtNumber(f?.book_value_per_share)} />
                 <MetricRow label="Lucros 5 Anos (g)" value={f?.earnings_growth_5y != null ? `${(f.earnings_growth_5y * 100).toFixed(1)}%` : '-'} />
@@ -1176,7 +1145,7 @@ export default function Analysis() {
                         <div className="rounded-lg border bg-muted/30 p-3">
                           <div className="text-xs text-muted-foreground mb-1">Upside vs Preço Atual</div>
                           {price != null ? (() => {
-                            const u = calcUpside(dcfResult.intrinsicPerShare, price)
+                            const u = calcIntrinsicUpside(dcfResult.intrinsicPerShare, price)
                             return (
                               <div className={`text-xl font-bold ${(u ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                 {u != null ? fmtPct(u) : '-'}
