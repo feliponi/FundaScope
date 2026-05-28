@@ -59,96 +59,63 @@ export function calcBazinSignal(
   return currentPrice <= teto8 ? 'COMPRA' : 'NÃO COMPRA'
 }
 
-// ---------------------------------------------------------------------------
-// GRAHAM
-// ---------------------------------------------------------------------------
+// ***************************************************************************
+// GRAHAM VALUATION MODULE
+// ***************************************************************************
 
-/**
- * Graham intrinsic value: √(22.5 × eps × bookValuePerShare)
- * Returns null if eps ≤ 0 or bookValuePerShare ≤ 0.
- */
 export function calcIntrinsicValue(
-  eps: number | null | undefined,
-  bookValuePerShare: number | null | undefined
+  eps?: number | null,
+  bookValuePerShare?: number | null
 ): number | null {
-  if (!isValid(eps, bookValuePerShare)) return null
-  if (eps! <= 0 || bookValuePerShare! <= 0) return null
-  return Math.sqrt(22.5 * eps! * bookValuePerShare!)
+  if (typeof eps !== 'number' || typeof bookValuePerShare !== 'number') return null;
+  if (eps <= 0 || bookValuePerShare <= 0) return null;
+  return Math.sqrt(22.5 * eps * bookValuePerShare);
 }
 
-/**
- * Graham fair value (with 5-year earnings growth):
- * fairValue = eps × (8.5 + 2 × (g × 100))
- * g is a decimal (e.g. 0.12 for 12%).
- *
- * Graham's formula assumes a sustainable long-term growth rate. To prevent
- * absurd valuations for high-growth tech stocks (e.g. g=1.03 → multiplier 214),
- * g is capped at 25% (0.25) — the upper bound of what Graham considered credible.
- * The stored earnings_growth_5y preserves the real historical value.
- */
 export function calcFairValue(
-  eps: number | null | undefined,
-  earningsGrowth5y: number | null | undefined
+  eps?: number | null,
+  earningsGrowth5y?: number | null
 ): number | null {
-  if (!isValid(eps, earningsGrowth5y)) return null
-  if (eps! <= 0) return null
-  const gCapped = Math.min(earningsGrowth5y!, 0.25)
-  const gPct = gCapped * 100
-  return eps! * (8.5 + 2 * gPct)
+  if (typeof eps !== 'number' || typeof earningsGrowth5y !== 'number') return null;
+  if (eps <= 0) return null;
+  const gBounded = Math.max(0, Math.min(earningsGrowth5y, 0.25));
+  return eps * (8.5 + 2 * (gBounded * 100));
 }
 
-/**
- * Upside based on intrinsic value (Graham):
- * upside = (intrinsicValue / currentPrice) - 1
- * Returns as a decimal (multiply by 100 for %).
- */
-export function calcUpside(
-  intrinsicValue: number | null | undefined,
-  currentPrice: number | null | undefined
-): number | null {
-  if (!isValid(intrinsicValue, currentPrice)) return null
-  if (currentPrice! === 0) return null
-  return intrinsicValue! / currentPrice! - 1
-}
-
-/**
- * Market-adjusted safety (Seg. de acordo com Juros de Mercado):
- * marketSafety = (fairValue / currentPrice) - 1
- * Returns as a decimal (multiply by 100 for %).
- */
-export function calcMarketSafety(
-  fairValue: number | null | undefined,
-  currentPrice: number | null | undefined
-): number | null {
-  if (!isValid(fairValue, currentPrice)) return null
-  if (currentPrice! === 0) return null
-  return fairValue! / currentPrice! - 1
-}
-
-/**
- * Margin of safety: (intrinsicValue - currentPrice) / intrinsicValue × 100
- * Returns as a percentage (e.g. 35.0 for 35%).
- */
 export function calcMarginOfSafety(
-  intrinsicValue: number | null | undefined,
-  currentPrice: number | null | undefined
+  fairValue?: number | null,
+  currentPrice?: number | null
 ): number | null {
-  if (!isValid(intrinsicValue, currentPrice)) return null
-  if (intrinsicValue! === 0) return null
-  return ((intrinsicValue! - currentPrice!) / intrinsicValue!) * 100
+  if (typeof fairValue !== 'number' || typeof currentPrice !== 'number') return null;
+  if (currentPrice <= 0 || fairValue <= 0) return null;
+  return 1 - (currentPrice / fairValue);
 }
 
-/**
- * Graham safety indicator based on margin of safety thresholds:
- * > 30% = green, 10–30% = yellow, < 10% = red
- */
+export function calcIntrinsicUpside(
+  intrinsicValue?: number | null,
+  currentPrice?: number | null
+): number | null {
+  if (typeof intrinsicValue !== 'number' || typeof currentPrice !== 'number') return null;
+  if (currentPrice <= 0 || intrinsicValue <= 0) return null;
+  return (intrinsicValue / currentPrice) - 1;
+}
+
+export function calcFairValueUpside(
+  fairValue?: number | null,
+  currentPrice?: number | null
+): number | null {
+  if (typeof fairValue !== 'number' || typeof currentPrice !== 'number') return null;
+  if (currentPrice <= 0 || fairValue <= 0) return null;
+  return (fairValue / currentPrice) - 1;
+}
+
 export function calcSafetyColor(
-  marginOfSafety: number | null | undefined
+  marginOfSafety?: number | null
 ): 'green' | 'yellow' | 'red' | null {
-  if (marginOfSafety == null) return null
-  if (marginOfSafety > 30) return 'green'
-  if (marginOfSafety >= 10) return 'yellow'
-  return 'red'
+  if (typeof marginOfSafety !== 'number') return null;
+  if (marginOfSafety > 0.30) return 'green';
+  if (marginOfSafety >= 0.10) return 'yellow';
+  return 'red';
 }
 
 // ---------------------------------------------------------------------------

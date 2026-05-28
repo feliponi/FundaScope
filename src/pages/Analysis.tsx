@@ -7,8 +7,8 @@ import {
   calcBazinSignal,
   calcIntrinsicValue,
   calcFairValue,
-  calcUpside,
-  calcMarketSafety,
+  calcIntrinsicUpside,  
+  calcFairValueUpside,
   calcMarginOfSafety,
   calcSafetyColor,
   calcCurrentValue,
@@ -194,7 +194,7 @@ function SafetyIndicator({ value, label }: { value: number | null; label: string
   return (
     <div className={`rounded-lg border p-4 ${colorClass}`}>
       <div className="text-xs font-medium uppercase tracking-wide mb-1">{label}</div>
-      <div className="text-2xl font-bold">{value != null ? `${value.toFixed(1)}%` : '-'}</div>
+      <div className="text-2xl font-bold">{value != null ? `${(value * 100).toFixed(1)}%` : '-'}</div>
     </div>
   )
 }
@@ -266,6 +266,8 @@ function buildColData(
   fund: Fundamentals | null,
   price: number | null,
 ): ColData {
+  const fairValue = calcFairValue(fund?.eps, fund?.earnings_growth_5y)
+
   return {
     ticker,
     company_name: profile?.company_name ?? null,
@@ -294,12 +296,9 @@ function buildColData(
     revenue_growth_yoy: fund?.revenue_growth_yoy ?? null,
     market_cap: fund?.market_cap ?? null,
     intrinsic: calcIntrinsicValue(fund?.eps, fund?.book_value_per_share),
-    fair: calcFairValue(fund?.eps, fund?.earnings_growth_5y),
-    marginOfSafety: calcMarginOfSafety(
-      calcIntrinsicValue(fund?.eps, fund?.book_value_per_share),
-      price,
-    ),
-    marketSafety: calcMarketSafety(calcFairValue(fund?.eps, fund?.earnings_growth_5y), price),
+    fair: fairValue,
+    marginOfSafety: calcMarginOfSafety(fairValue, price),
+    marketSafety: calcFairValueUpside(fairValue, price), // Upside do Fair Value
     teto8: calcTeto8(fund?.dividend_yield, price),
     teto6: calcTeto6(fund?.dividend_yield, price),
     signal: calcBazinSignal(fund?.dividend_yield, price),
@@ -332,8 +331,7 @@ const COMPARISON_METRICS: MetricDef[] = [
   { label: 'PEG', get: (d) => d.peg, renderCell: (d) => fmtNumber(d.peg), higherBetter: false },
   { section: 'Análise Graham', label: 'V. Intrínseco', get: (d) => d.intrinsic, renderCell: (d, f) => f(d.intrinsic, d.currency), higherBetter: true },
   { label: 'V. Justo', get: (d) => d.fair, renderCell: (d, f) => f(d.fair, d.currency), higherBetter: true },
-  { label: 'Margem Seg. %', get: (d) => d.marginOfSafety, renderCell: (d) => d.marginOfSafety != null ? `${d.marginOfSafety.toFixed(1)}%` : '—', higherBetter: true },
-  { label: 'Seg. Juros Merc. %', get: (d) => d.marketSafety, renderCell: (d) => d.marketSafety != null ? fmtPct(d.marketSafety) : '—', higherBetter: true },
+  { label: 'Margem Seg. %', get: (d) => d.marginOfSafety, renderCell: (d) => d.marginOfSafety != null ? `${(d.marginOfSafety * 100).toFixed(1)}%` : '—', higherBetter: true },
   { label: 'Teto 8% (Bazin)', get: (d) => d.teto8, renderCell: (d, f) => f(d.teto8, d.currency) },
   { label: 'Teto 6% (Bazin)', get: (d) => d.teto6, renderCell: (d, f) => f(d.teto6, d.currency) },
   {
@@ -837,9 +835,8 @@ export default function Analysis() {
   const f = fundamentals
   const intrinsic = calcIntrinsicValue(f?.eps, f?.book_value_per_share)
   const fair = calcFairValue(f?.eps, f?.earnings_growth_5y)
-  const upside = calcUpside(intrinsic, price)
-  const marketSafety = calcMarketSafety(fair, price)
-  const margin = calcMarginOfSafety(intrinsic, price)
+  const upside = calcIntrinsicUpside(intrinsic, price)
+  const marginofSafety = calcMarginOfSafety(fair, price)
   const teto8 = calcTeto8(f?.dividend_yield, price)
   const teto6 = calcTeto6(f?.dividend_yield, price)
   const signal = calcBazinSignal(f?.dividend_yield, price)
@@ -917,6 +914,38 @@ export default function Analysis() {
 
       {/* Analyst Insights */}
       {analystData && (analystData.target_low != null || (analystData.rec_history && analystData.rec_history.length > 0)) && (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Graham Analysis */}
+        <Card>
+          <CardHeader><CardTitle className="text-base">Análise Graham</CardTitle></CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <SafetyIndicator value={marginofSafety} label="Margem de Segurança" />
+              <div className="rounded-lg border bg-muted/30 p-4">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">V. Intrínseco</div>
+                <div className="text-2xl font-bold">{intrinsic != null ? fmt(intrinsic, profile?.currency) : '-'}</div>
+              </div>
+              <div className="rounded-lg border bg-muted/30 p-4">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">V. Justo</div>
+                <div className="text-2xl font-bold">{fair != null ? fmt(fair, profile?.currency) : '-'}</div>
+              </div>
+              <div className="rounded-lg border bg-muted/30 p-4">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">Upside</div>
+                <div className={`text-2xl font-bold ${upside != null && upside > 0 ? 'text-green-600' : upside != null ? 'text-red-600' : ''}`}>
+                  {upside != null ? fmtPct(upside) : '-'}
+                </div>
+              </div>
+            </div>
+            <div>
+              <MetricRow label="LPA (EPS)" value={fmtNumber(f?.eps)} />
+              <MetricRow label="VPA" value={fmtNumber(f?.book_value_per_share)} />
+              <MetricRow label="Lucros 5 Anos (g)" value={f?.earnings_growth_5y != null ? `${(f.earnings_growth_5y * 100).toFixed(1)}%` : '-'} />
+              <MetricRow label="Payout Médio" value={f?.payout_avg != null ? `${(f.payout_avg * 100).toFixed(1)}%` : '-'} />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Bazin Analysis */}
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
