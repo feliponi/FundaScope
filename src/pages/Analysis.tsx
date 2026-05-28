@@ -7,8 +7,9 @@ import {
   calcBazinSignal,
   calcIntrinsicValue,
   calcFairValue,
-  calcUpside,
-  calcMarketSafety,
+  // IMPORTAÇÕES CORRIGIDAS ABAIXO:
+  calcIntrinsicUpside,  
+  calcFairValueUpside,
   calcMarginOfSafety,
   calcSafetyColor,
   calcCurrentValue,
@@ -163,6 +164,8 @@ function buildColData(
   fund: Fundamentals | null,
   price: number | null,
 ): ColData {
+  const fairValue = calcFairValue(fund?.eps, fund?.earnings_growth_5y)
+
   return {
     ticker,
     company_name: profile?.company_name ?? null,
@@ -191,12 +194,9 @@ function buildColData(
     revenue_growth_yoy: fund?.revenue_growth_yoy ?? null,
     market_cap: fund?.market_cap ?? null,
     intrinsic: calcIntrinsicValue(fund?.eps, fund?.book_value_per_share),
-    fair: calcFairValue(fund?.eps, fund?.earnings_growth_5y),
-    marginOfSafety: calcMarginOfSafety(
-      calcIntrinsicValue(fund?.eps, fund?.book_value_per_share),
-      price,
-    ),
-    marketSafety: calcMarketSafety(calcFairValue(fund?.eps, fund?.earnings_growth_5y), price),
+    fair: fairValue,
+    marginOfSafety: calcMarginOfSafety(fairValue, price),
+    marketSafety: calcFairValueUpside(fairValue, price), // Upside do Fair Value
     teto8: calcTeto8(fund?.dividend_yield, price),
     teto6: calcTeto6(fund?.dividend_yield, price),
     signal: calcBazinSignal(fund?.dividend_yield, price),
@@ -727,9 +727,8 @@ export default function Analysis() {
   const f = fundamentals
   const intrinsic = calcIntrinsicValue(f?.eps, f?.book_value_per_share)
   const fair = calcFairValue(f?.eps, f?.earnings_growth_5y)
-  const upside = calcUpside(intrinsic, price)
-  const marketSafety = calcMarketSafety(fair, price)
-  const margin = calcMarginOfSafety(intrinsic, price)
+  const upside = calcIntrinsicUpside(intrinsic, price)
+  const marginofSafety = calcMarginOfSafety(fair, price)
   const teto8 = calcTeto8(f?.dividend_yield, price)
   const teto6 = calcTeto6(f?.dividend_yield, price)
   const signal = calcBazinSignal(f?.dividend_yield, price)
@@ -798,7 +797,7 @@ export default function Analysis() {
           <CardHeader><CardTitle className="text-base">Análise Graham</CardTitle></CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
-              <SafetyIndicator value={margin} label="Margem de Segurança" />
+              <SafetyIndicator value={marginofSafety} label="Margem de Segurança" />
               <div className="rounded-lg border bg-muted/30 p-4">
                 <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">V. Intrínseco</div>
                 <div className="text-2xl font-bold">{intrinsic != null ? fmt(intrinsic, profile?.currency) : '-'}</div>
@@ -815,7 +814,6 @@ export default function Analysis() {
               </div>
             </div>
             <div>
-              <MetricRow label="Seg. Juros de Mercado" value={marketSafety != null ? fmtPct(marketSafety) : '-'} color={marketSafety != null && marketSafety > 0 ? 'text-green-600' : 'text-red-600'} />
               <MetricRow label="LPA (EPS)" value={fmtNumber(f?.eps)} />
               <MetricRow label="VPA" value={fmtNumber(f?.book_value_per_share)} />
               <MetricRow label="Lucros 5 Anos (g)" value={f?.earnings_growth_5y != null ? `${(f.earnings_growth_5y * 100).toFixed(1)}%` : '-'} />
