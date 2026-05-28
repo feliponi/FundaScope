@@ -344,6 +344,41 @@ def take_portfolio_snapshots() -> None:
 # Price updates
 # ---------------------------------------------------------------------------
 
+def _extract_close(raw, ticker: str, is_single: bool):
+    """Return the Close price Series for *ticker* from a yf.download result.
+
+    yfinance's DataFrame structure varies by version and by whether one or
+    multiple tickers were requested:
+
+    - Single ticker (any version):  raw["Close"]             → Series
+    - Multi-ticker, no group_by:    raw["Close"][ticker]     → Series
+    - Multi-ticker, group_by=ticker: raw[ticker]["Close"]    → Series
+    - New yfinance MultiIndex:      raw[("Close", ticker)]   → Series
+
+    We try each in order and return the first that works.
+    """
+    import pandas as pd
+
+    attempts = []
+    if is_single:
+        attempts.append(lambda: raw["Close"])
+    attempts += [
+        lambda: raw["Close"][ticker],          # multi, no group_by (most common)
+        lambda: raw[ticker]["Close"],           # multi, group_by="ticker"
+        lambda: raw[("Close", ticker)],         # MultiIndex tuple key
+    ]
+
+    for attempt in attempts:
+        try:
+            result = attempt()
+            if isinstance(result, pd.Series):
+                return result
+        except (KeyError, TypeError):
+            continue
+
+    return None
+
+
 def update_prices(tickers: list[str]) -> list[str]:
     """Download closing prices in batches of PRICE_BATCH_SIZE. Returns failed tickers."""
     failed: list[str] = []
@@ -357,11 +392,9 @@ def update_prices(tickers: list[str]) -> list[str]:
             raw = retry_call(
                 yf.download,
                 batch,
-                period="2d",
+                period="5d",   # 5d gives more fallback days for holidays/weekends
                 auto_adjust=True,
                 progress=False,
-                group_by="ticker",
-                ticker=",".join(batch),
             )
         except Exception as exc:
             log.error("Price batch %s failed: %s", batch, exc)
@@ -371,10 +404,11 @@ def update_prices(tickers: list[str]) -> list[str]:
         rows: list[dict] = []
         for tkr in batch:
             try:
-                if len(batch) == 1:
-                    close_series = raw["Close"]
-                else:
-                    close_series = raw[tkr]["Close"]
+                close_series = _extract_close(raw, tkr, len(batch) == 1)
+                if close_series is None:
+                    log.warning("No close price for %s (unrecognised DataFrame structure)", tkr)
+                    failed.append(tkr)
+                    continue
 
                 close_series = close_series.dropna()
                 if close_series.empty:
@@ -502,9 +536,20 @@ def update_fundamentals_and_profiles(tickers: list[str], include_profile: bool =
             continue
 
         # ---- calculated fields ----
-        dps_raw = safe_float(info.get("dividendYield"))
+        # yfinance returns dividendYield as a percentage value (e.g. 0.62 for 0.62%),
+        # NOT as a decimal fraction (which would be 0.0062). Divide by 100 to normalise
+        # before storing so all downstream code treats it as a decimal (0.0062 = 0.62%).
+        dy_raw = safe_float(info.get("dividendYield"))
+        dy_decimal: Optional[float] = None
+        if dy_raw is not None:
+            dy_decimal = dy_raw / 100.0
+            if dy_decimal > 1.0:  # sanity: > 100 % DY is impossible, discard
+                log.warning("Absurd dividend yield (%.1f%%) for %s — discarding", dy_raw, tkr)
+                dy_decimal = None
+
         price_raw = safe_float(info.get("regularMarketPrice") or info.get("currentPrice"))
-        dps = (dps_raw * price_raw) if (dps_raw is not None and price_raw is not None) else None
+        # DPS = annual dividend per share = (yield as decimal) × price
+        dps = (dy_decimal * price_raw) if (dy_decimal is not None and price_raw is not None) else None
 
         enterprise_value = safe_float(info.get("enterpriseValue"))
         ebit = safe_float(info.get("ebit"))
@@ -554,9 +599,8 @@ def update_fundamentals_and_profiles(tickers: list[str], include_profile: bool =
             "debt_equity": safe_float(info.get("debtToEquity")),
             "current_ratio": safe_float(info.get("currentRatio")),
             "net_debt_ebit": net_debt_ebit,
-            # dividends — yfinance sometimes returns absurd values (e.g. 9.05 = 905%) for B3
-            # stocks; treat anything above 1.0 (100%) as bad data and discard it
-            "dividend_yield": (lambda v: v if v is not None and v <= 1.0 else None)(safe_float(info.get("dividendYield"))),
+            # dividends — stored as decimal fraction (0.0062 = 0.62%); see dy_decimal above
+            "dividend_yield": dy_decimal,
             "payout_avg": safe_float(info.get("payoutRatio")),
             # growth
             "earnings_growth_5y": growth_5y,
