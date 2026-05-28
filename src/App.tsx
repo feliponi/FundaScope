@@ -6,7 +6,8 @@ import Login from '@/pages/Login'
 import Screener from '@/pages/Screener'
 import Portfolio from '@/pages/Portfolio'
 import Analysis from '@/pages/Analysis'
-import { TrendingUp, BarChart2, Briefcase, LogOut, Bell, X } from 'lucide-react'
+import Simulator from '@/pages/Simulator'
+import { TrendingUp, BarChart2, Briefcase, LogOut, Bell, X, FlaskConical } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { CurrencyProvider, useCurrency, type DisplayCurrency } from '@/lib/currency'
 
@@ -116,6 +117,10 @@ function Layout({ children, session }: { children: React.ReactNode; session: Ses
                 <Briefcase className="h-4 w-4" />
                 Portfólio
               </NavLink>
+              <NavLink to="/simulator" className={navLinkClass}>
+                <FlaskConical className="h-4 w-4" />
+                Simulador
+              </NavLink>
             </nav>
           </div>
           <div className="flex items-center gap-2">
@@ -165,6 +170,14 @@ function AppRoutes({ session }: { session: Session | null }) {
         element={
           <AuthGuard session={session}>
             <Layout session={session}><Analysis /></Layout>
+          </AuthGuard>
+        }
+      />
+      <Route
+        path="/simulator"
+        element={
+          <AuthGuard session={session}>
+            <Layout session={session}><Simulator /></Layout>
           </AuthGuard>
         }
       />

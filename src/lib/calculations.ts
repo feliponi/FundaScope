@@ -242,3 +242,107 @@ export function fmtLargeNumber(value: number | null | undefined): string {
   if (Math.abs(value) >= 1e6) return `${(value / 1e6).toFixed(2)}M`
   return value.toFixed(0)
 }
+
+// ---------------------------------------------------------------------------
+// SIMULATOR (E SE?)
+// ---------------------------------------------------------------------------
+
+export type SimulatorInput = {
+  ticker: string
+  company_name: string | null
+  currency: string | null
+  /** Current price in the user's display currency (used for allocation maths). */
+  current_price: number
+  /** Current price in the ticker's native currency (used when writing avg_price to portfolios). */
+  current_price_native: number
+  dividend_yield: number    // decimal, e.g. 0.06 for 6%
+  /** Annual DPS in display currency. */
+  dps_display: number
+  margin_of_safety: number  // percentage, e.g. 35.0
+}
+
+export type SimulatorAllocation = SimulatorInput & {
+  weight_pct: number
+  allocated: number       // display currency
+  shares: number          // integer (floor)
+  actual_cost: number     // display currency
+  leftover: number        // display currency
+  est_annual_div: number  // display currency
+}
+
+/**
+ * DY-weighted allocation across eligible tickers.
+ * All monetary values (amount, prices) must be in the same display currency.
+ * Returns rows sorted by weight_pct descending.
+ */
+export function calculateAllocation(
+  amount: number,
+  eligible: SimulatorInput[]
+): SimulatorAllocation[] {
+  if (!isValid(amount) || amount <= 0 || eligible.length === 0) return []
+  const totalDy = eligible.reduce((s, t) => s + t.dividend_yield, 0)
+  if (totalDy === 0) return []
+  return eligible
+    .map((t) => {
+      const weight_pct = t.dividend_yield / totalDy
+      const allocated = amount * weight_pct
+      const shares = Math.floor(allocated / t.current_price)
+      const actual_cost = shares * t.current_price
+      const leftover = allocated - actual_cost
+      const est_annual_div = shares * t.dps_display
+      return { ...t, weight_pct, allocated, shares, actual_cost, leftover, est_annual_div }
+    })
+    .sort((a, b) => b.weight_pct - a.weight_pct)
+}
+
+// ---------------------------------------------------------------------------
+// DIVIDEND TRACKER
+// ---------------------------------------------------------------------------
+
+export type DividendRow = {
+  ticker: string
+  company_name: string | null
+  quantity: number
+  dps: number | null         // native currency per share
+  dividend_yield: number | null
+  currency: string | null
+  annual_div: number | null  // native currency
+  monthly_div: number | null // native currency
+}
+
+/**
+ * Compute per-ticker annual/monthly dividend estimates from portfolio positions.
+ * All monetary values are in each ticker's native currency; callers convert for display.
+ * Uses dps from DB when available; falls back to dividend_yield × current_price.
+ */
+export function calculateMonthlyDividends(
+  positions: Array<{
+    ticker: string
+    company_name: string | null
+    quantity: number
+    dps: number | null
+    dividend_yield: number | null
+    current_price: number | null
+    currency: string | null
+  }>
+): DividendRow[] {
+  return positions.map((p) => {
+    const effectiveDps =
+      p.dps ??
+      (p.dividend_yield != null && p.current_price != null
+        ? p.dividend_yield * p.current_price
+        : null)
+    const annual_div = effectiveDps != null ? p.quantity * effectiveDps : null
+    const monthly_div = annual_div != null ? annual_div / 12 : null
+    return {
+      ticker: p.ticker,
+      company_name: p.company_name,
+      quantity: p.quantity,
+      dps: effectiveDps,
+      dividend_yield: p.dividend_yield,
+      currency: p.currency,
+      annual_div,
+      monthly_div,
+    }
+  })
+}

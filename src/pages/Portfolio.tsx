@@ -8,19 +8,25 @@ import {
   calcPlPct,
   calcAnnualDiv,
   calcWeight,
+  calculateMonthlyDividends,
+  type DividendRow,
   fmtPct,
+  fmtNumber,
 } from '@/lib/calculations'
 import { useCurrency } from '@/lib/currency'
 import {
   ResponsiveContainer,
   LineChart,
   Line,
+  BarChart,
+  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   Legend,
 } from 'recharts'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -42,6 +48,13 @@ import {
 } from '@/components/ui/select'
 import { Plus, Pencil, Trash2, TrendingUp, TrendingDown } from 'lucide-react'
 
+const CHART_COLORS = [
+  '#22c55e', '#3b82f6', '#f59e0b', '#ef4444',
+  '#a855f7', '#06b6d4', '#ec4899', '#84cc16', '#f97316',
+]
+const MONTH_LABELS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+const MAX_CHART_STACKS = 7
+
 type PortfolioRow = {
   id: string
   ticker: string
@@ -51,9 +64,232 @@ type PortfolioRow = {
   currency?: string | null
   current_price?: number | null
   dividend_yield?: number | null
+  dps?: number | null
 }
 
 type TickerOption = { ticker: string; company_name: string | null }
+
+// ---------------------------------------------------------------------------
+// Dividend Tracker sub-component
+// ---------------------------------------------------------------------------
+
+type EnrichedRow = PortfolioRow & {
+  current_value: number | null
+  cost_basis: number | null
+  pl_abs: number | null
+  pl_pct: number | null
+  annual_div: number | null
+  weight: number | null
+}
+
+function SummaryCard({ label, value, color }: { label: string; value: string; color?: string }) {
+  return (
+    <Card>
+      <CardHeader className="pb-2 pt-4 px-4">
+        <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{label}</CardTitle>
+      </CardHeader>
+      <CardContent className="px-4 pb-4">
+        <div className={`text-lg font-bold ${color ?? ''}`}>{value}</div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function DividendTrackerTab({ rows }: { rows: EnrichedRow[] }) {
+  const { fmt, convert, currency } = useCurrency()
+
+  const divRows: DividendRow[] = useMemo(
+    () =>
+      calculateMonthlyDividends(
+        rows.map((r) => ({
+          ticker: r.ticker,
+          company_name: r.company_name ?? null,
+          quantity: r.quantity,
+          dps: r.dps ?? null,
+          dividend_yield: r.dividend_yield ?? null,
+          current_price: r.current_price ?? null,
+          currency: r.currency ?? null,
+        }))
+      ),
+    [rows]
+  )
+
+  const sortedRows = useMemo(
+    () => [...divRows].sort(
+      (a, b) =>
+        convert(b.annual_div ?? 0, b.currency ?? 'USD') - convert(a.annual_div ?? 0, a.currency ?? 'USD')
+    ),
+    [divRows, convert, currency]
+  )
+
+  const totalAnnualDiv = useMemo(
+    () => sortedRows.reduce((s, r) => s + convert(r.annual_div ?? 0, r.currency ?? 'USD'), 0),
+    [sortedRows, convert, currency]
+  )
+  const totalMonthlyAvg = totalAnnualDiv / 12
+
+  const totalCurrentValue = useMemo(
+    () => rows.reduce((s, r) => s + convert(r.current_value ?? 0, r.currency ?? 'USD'), 0),
+    [rows, convert, currency]
+  )
+  const portfolioYield = totalCurrentValue > 0 ? totalAnnualDiv / totalCurrentValue : null
+
+  // Build stacked bar chart data — top N tickers + "Outros"
+  const topRows = sortedRows.slice(0, MAX_CHART_STACKS)
+  const otherRows = sortedRows.slice(MAX_CHART_STACKS)
+  const chartKeys = [
+    ...topRows.map((r) => r.ticker),
+    ...(otherRows.length > 0 ? ['Outros'] : []),
+  ]
+  const othersMonthly = otherRows.reduce(
+    (s, r) => s + convert(r.monthly_div ?? 0, r.currency ?? 'USD'), 0
+  )
+
+  const chartData = MONTH_LABELS.map((month) => {
+    const entry: Record<string, number | string> = { month }
+    topRows.forEach((r) => {
+      entry[r.ticker] = convert(r.monthly_div ?? 0, r.currency ?? 'USD')
+    })
+    if (otherRows.length > 0) entry['Outros'] = othersMonthly
+    return entry
+  })
+
+  if (rows.length === 0) {
+    return (
+      <Card>
+        <CardContent className="px-6 py-12 text-center text-sm text-muted-foreground">
+          Adicione posições ao portfólio para ver o rastreamento de dividendos.
+        </CardContent>
+      </Card>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+        <SummaryCard label="Div. Anuais Est." value={fmt(totalAnnualDiv, currency)} />
+        <SummaryCard label="Média Mensal Est." value={fmt(totalMonthlyAvg, currency)} />
+        <SummaryCard label="Yield do Portfólio" value={fmtPct(portfolioYield)} />
+        <SummaryCard label="Melhor Mês" value={fmt(totalMonthlyAvg, currency)} />
+        <SummaryCard label="Pior Mês" value={fmt(totalMonthlyAvg, currency)} />
+      </div>
+
+      {/* Monthly bar chart */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Dividendos Mensais Estimados</CardTitle>
+        </CardHeader>
+        <CardContent className="px-2 pb-4">
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+              <XAxis dataKey="month" tick={{ fontSize: 11 }} tickLine={false} />
+              <YAxis
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                tickFormatter={(v: any) => fmt(v as number, currency)}
+                tick={{ fontSize: 11 }}
+                tickLine={false}
+                axisLine={false}
+                width={80}
+              />
+              <Tooltip
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                formatter={(value: any, name: any) => [fmt(value as number, currency), name as string]}
+                contentStyle={{ fontSize: 12 }}
+              />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              {chartKeys.map((key, i) => (
+                <Bar
+                  key={key}
+                  dataKey={key}
+                  stackId="divs"
+                  fill={CHART_COLORS[i % CHART_COLORS.length]}
+                  name={key}
+                />
+              ))}
+            </BarChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+
+      {/* Breakdown table */}
+      <div className="rounded-lg border overflow-auto">
+        <table className="w-full text-sm">
+          <thead className="border-b bg-muted/40">
+            <tr>
+              {['Ticker', 'Empresa', 'Qtd', 'DPS', 'DY%', 'Div. Anual', 'Div. Mensal', '% do Total'].map((h) => (
+                <th key={h} className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {sortedRows.map((r) => {
+              const noDivData = r.dps == null && r.dividend_yield == null
+              return (
+                <tr
+                  key={r.ticker}
+                  className="hover:bg-muted/30 transition-colors"
+                  title={noDivData ? 'Sem dados de dividendos disponíveis para este ticker' : undefined}
+                >
+                  <td className="px-3 py-2 font-medium">
+                    <Link to={`/analysis/${r.ticker}`} className="text-primary hover:underline">
+                      {r.ticker}
+                    </Link>
+                  </td>
+                  <td className="px-3 py-2 text-muted-foreground max-w-[160px] truncate">
+                    {r.company_name ?? '-'}
+                  </td>
+                  <td className="px-3 py-2">{r.quantity}</td>
+                  <td className="px-3 py-2">
+                    {r.dps != null ? fmt(r.dps, r.currency) : <span className="text-muted-foreground">—</span>}
+                  </td>
+                  <td className="px-3 py-2">
+                    {r.dividend_yield != null
+                      ? `${(r.dividend_yield * 100).toFixed(2)}%`
+                      : <span className="text-muted-foreground">—</span>}
+                  </td>
+                  <td className="px-3 py-2 font-medium text-green-700">
+                    {r.annual_div != null
+                      ? fmt(convert(r.annual_div, r.currency ?? 'USD'), currency)
+                      : <span className="text-muted-foreground font-normal">—</span>}
+                  </td>
+                  <td className="px-3 py-2">
+                    {r.monthly_div != null
+                      ? fmt(convert(r.monthly_div, r.currency ?? 'USD'), currency)
+                      : <span className="text-muted-foreground">—</span>}
+                  </td>
+                  <td className="px-3 py-2">
+                    {totalAnnualDiv > 0 && r.annual_div != null
+                      ? `${(convert(r.annual_div, r.currency ?? 'USD') / totalAnnualDiv * 100).toFixed(1)}%`
+                      : <span className="text-muted-foreground">—</span>}
+                  </td>
+                </tr>
+              )
+            })}
+
+            {/* Footer totals */}
+            <tr className="bg-muted/60 font-semibold border-t-2 border-border">
+              <td className="px-3 py-2" colSpan={5}>Total</td>
+              <td className="px-3 py-2 text-green-700">{fmt(totalAnnualDiv, currency)}</td>
+              <td className="px-3 py-2">{fmt(totalMonthlyAvg, currency)}</td>
+              <td className="px-3 py-2">100%</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        Os valores de dividendos são estimativas baseadas no yield atual e distribuídos
+        igualmente ao longo dos meses. As datas e valores reais de pagamento podem diferir.
+      </p>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main Portfolio component
+// ---------------------------------------------------------------------------
 
 export default function Portfolio() {
   const { fmt, convert, currency } = useCurrency()
@@ -96,7 +332,7 @@ export default function Portfolio() {
     const [portfolioRes, pricesRes, fundRes, profilesRes, tickersRes, snapshotRes] = await Promise.all([
       supabase.from('portfolios').select('*').eq('user_id', user.id),
       supabase.from('stock_prices').select('ticker, price'),
-      supabase.from('stock_fundamentals').select('ticker, dividend_yield'),
+      supabase.from('stock_fundamentals').select('ticker, dividend_yield, dps'),
       supabase.from('stock_profiles').select('ticker, company_name, currency'),
       supabase.from('tickers').select('ticker'),
       supabase.from('portfolio_snapshots')
@@ -109,7 +345,7 @@ export default function Portfolio() {
     if (portfolioRes.error) { setError(portfolioRes.error.message); setLoading(false); return }
 
     const priceMap = new Map((pricesRes.data ?? []).map((r) => [r.ticker, r.price]))
-    const fundMap = new Map((fundRes.data ?? []).map((r) => [r.ticker, r.dividend_yield]))
+    const fundMap = new Map((fundRes.data ?? []).map((r) => [r.ticker, r]))
     const profileMap = new Map((profilesRes.data ?? []).map((r) => [r.ticker, r]))
 
     const enriched = (portfolioRes.data ?? []).map((p) => ({
@@ -117,7 +353,8 @@ export default function Portfolio() {
       company_name: profileMap.get(p.ticker)?.company_name ?? null,
       currency: profileMap.get(p.ticker)?.currency ?? null,
       current_price: priceMap.get(p.ticker) ?? null,
-      dividend_yield: fundMap.get(p.ticker) ?? null,
+      dividend_yield: fundMap.get(p.ticker)?.dividend_yield ?? null,
+      dps: fundMap.get(p.ticker)?.dps ?? null,
     }))
     setRows(enriched)
     setSnapshots(snapshotRes.data ?? [])
@@ -132,7 +369,7 @@ export default function Portfolio() {
     setLoading(false)
   }
 
-  const enrichedRows = useMemo(() => {
+  const enrichedRows: EnrichedRow[] = useMemo(() => {
     const totalValue = rows.reduce((sum, r) => {
       const cv = calcCurrentValue(r.quantity, r.current_price)
       return sum + (cv ?? 0)
@@ -264,166 +501,181 @@ export default function Portfolio() {
         </Dialog>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-        {[
-          { label: 'Total Investido', value: fmt(summary.totalInvested, currency) },
-          { label: 'Valor Atual', value: fmt(summary.totalValue, currency) },
-          {
-            label: 'P&L',
-            value: fmt(summary.totalPl, currency),
-            color: summary.totalPl >= 0 ? 'text-green-600' : 'text-red-600',
-          },
-          {
-            label: 'P&L (%)',
-            value: fmtPct(summary.totalPlPct),
-            color: (summary.totalPlPct ?? 0) >= 0 ? 'text-green-600' : 'text-red-600',
-          },
-          { label: 'Div. Anuais Est.', value: fmt(summary.totalDiv, currency) },
-          { label: 'Yield do Portfólio', value: fmtPct(summary.portfolioYield) },
-        ].map((c) => (
-          <Card key={c.label}>
-            <CardHeader className="pb-2 pt-4 px-4">
-              <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{c.label}</CardTitle>
-            </CardHeader>
-            <CardContent className="px-4 pb-4">
-              <div className={`text-lg font-bold ${c.color ?? ''}`}>{c.value}</div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      <Tabs defaultValue="portfolio">
+        <TabsList>
+          <TabsTrigger value="portfolio">Portfólio</TabsTrigger>
+          <TabsTrigger value="dividends">Dividend Tracker</TabsTrigger>
+        </TabsList>
 
-      {/* Equity Curve */}
-      {snapshots.length < 2 ? (
-        <Card>
-          <CardContent className="px-6 py-8 text-center text-sm text-muted-foreground">
-            A curva de patrimônio aparecerá após 2 ou mais atualizações de preços.
-          </CardContent>
-        </Card>
-      ) : (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Evolução do Portfólio</CardTitle>
-          </CardHeader>
-          <CardContent className="px-2 pb-4">
-            <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={snapshots} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis
-                  dataKey="snapshot_date"
-                  tickFormatter={(d: string) => {
-                    const dt = new Date(d + 'T12:00:00')
-                    return dt.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
-                  }}
-                  tick={{ fontSize: 11 }}
-                  tickLine={false}
-                />
-                <YAxis
-                  tickFormatter={(v: number) => fmt(v, currency)}
-                  tick={{ fontSize: 11 }}
-                  tickLine={false}
-                  axisLine={false}
-                  width={90}
-                />
-                <Tooltip
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  formatter={(value: any, name: any) => [fmt(value as number, currency), name as string]}
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  labelFormatter={(label: any) => new Date(String(label) + 'T12:00:00').toLocaleDateString('pt-BR')}
-                  contentStyle={{ fontSize: 12 }}
-                />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Line
-                  type="monotone"
-                  dataKey="total_value"
-                  name="Valor Atual"
-                  stroke="#22c55e"
-                  strokeWidth={2}
-                  dot={false}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="total_cost"
-                  name="Custo"
-                  stroke="#94a3b8"
-                  strokeWidth={2}
-                  dot={false}
-                  strokeDasharray="4 4"
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Portfolio Table */}
-      <div className="rounded-lg border overflow-auto">
-        <table className="w-full text-sm">
-          <thead className="border-b bg-muted/40">
-            <tr>
-              {['Ticker', 'Empresa', 'Qtd', 'Preço Médio', 'Preço Atual', 'Valor Atual', 'Custo', 'P&L', 'P&L (%)', 'DY%', 'Div. Anual Est.', 'Peso %', ''].map((h) => (
-                <th key={h} className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y">
-            {enrichedRows.map((r) => (
-              <tr key={r.id} className="hover:bg-muted/30 transition-colors">
-                <td className="px-3 py-2 font-medium">
-                  <Link to={`/analysis/${r.ticker}`} className="text-primary hover:underline">{r.ticker}</Link>
-                </td>
-                <td className="px-3 py-2 text-muted-foreground max-w-[160px] truncate">{r.company_name ?? '-'}</td>
-                <td className="px-3 py-2">{r.quantity}</td>
-                <td className="px-3 py-2">{fmt(r.avg_price, r.currency)}</td>
-                <td className="px-3 py-2">{r.current_price != null ? fmt(r.current_price, r.currency) : '-'}</td>
-                <td className="px-3 py-2">{r.current_value != null ? fmt(r.current_value, r.currency) : '-'}</td>
-                <td className="px-3 py-2">{r.cost_basis != null ? fmt(r.cost_basis, r.currency) : '-'}</td>
-                <td className={`px-3 py-2 font-medium ${(r.pl_abs ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  <span className="flex items-center gap-1">
-                    {(r.pl_abs ?? 0) >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-                    {r.pl_abs != null ? fmt(r.pl_abs, r.currency) : '-'}
-                  </span>
-                </td>
-                <td className={`px-3 py-2 font-medium ${(r.pl_pct ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  {r.pl_pct != null ? fmtPct(r.pl_pct) : '-'}
-                </td>
-                <td className="px-3 py-2">{r.dividend_yield != null ? `${(r.dividend_yield * 100).toFixed(2)}%` : '-'}</td>
-                <td className="px-3 py-2">{r.annual_div != null ? fmt(r.annual_div, r.currency) : '-'}</td>
-                <td className="px-3 py-2">{r.weight != null ? `${(r.weight * 100).toFixed(1)}%` : '-'}</td>
-                <td className="px-3 py-2">
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      onClick={() => {
-                        setEditRow(r)
-                        setEditQty(String(r.quantity))
-                        setEditAvg(String(r.avg_price))
-                        setEditError(null)
-                        setEditOpen(true)
-                      }}
-                    >
-                      <Pencil className="h-3 w-3" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-destructive hover:text-destructive"
-                      onClick={() => setDeleteId(r.id)}
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
-                  </div>
-                </td>
-              </tr>
+        {/* ── Tab 1: Portfolio ── */}
+        <TabsContent value="portfolio" className="space-y-6 mt-4">
+          {/* Summary Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            {[
+              { label: 'Total Investido', value: fmt(summary.totalInvested, currency) },
+              { label: 'Valor Atual', value: fmt(summary.totalValue, currency) },
+              {
+                label: 'P&L',
+                value: fmt(summary.totalPl, currency),
+                color: summary.totalPl >= 0 ? 'text-green-600' : 'text-red-600',
+              },
+              {
+                label: 'P&L (%)',
+                value: fmtPct(summary.totalPlPct),
+                color: (summary.totalPlPct ?? 0) >= 0 ? 'text-green-600' : 'text-red-600',
+              },
+              { label: 'Div. Anuais Est.', value: fmt(summary.totalDiv, currency) },
+              { label: 'Yield do Portfólio', value: fmtPct(summary.portfolioYield) },
+            ].map((c) => (
+              <Card key={c.label}>
+                <CardHeader className="pb-2 pt-4 px-4">
+                  <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{c.label}</CardTitle>
+                </CardHeader>
+                <CardContent className="px-4 pb-4">
+                  <div className={`text-lg font-bold ${c.color ?? ''}`}>{c.value}</div>
+                </CardContent>
+              </Card>
             ))}
-            {enrichedRows.length === 0 && (
-              <tr><td colSpan={13} className="px-3 py-12 text-center text-muted-foreground">Nenhuma posição no portfólio. Adicione seu primeiro ativo.</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+          </div>
+
+          {/* Equity Curve */}
+          {snapshots.length < 2 ? (
+            <Card>
+              <CardContent className="px-6 py-8 text-center text-sm text-muted-foreground">
+                A curva de patrimônio aparecerá após 2 ou mais atualizações de preços.
+              </CardContent>
+            </Card>
+          ) : (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">Evolução do Portfólio</CardTitle>
+              </CardHeader>
+              <CardContent className="px-2 pb-4">
+                <ResponsiveContainer width="100%" height={220}>
+                  <LineChart data={snapshots} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                    <XAxis
+                      dataKey="snapshot_date"
+                      tickFormatter={(d: string) => {
+                        const dt = new Date(d + 'T12:00:00')
+                        return dt.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
+                      }}
+                      tick={{ fontSize: 11 }}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      tickFormatter={(v: number) => fmt(v, currency)}
+                      tick={{ fontSize: 11 }}
+                      tickLine={false}
+                      axisLine={false}
+                      width={90}
+                    />
+                    <Tooltip
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      formatter={(value: any, name: any) => [fmt(value as number, currency), name as string]}
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      labelFormatter={(label: any) => new Date(String(label) + 'T12:00:00').toLocaleDateString('pt-BR')}
+                      contentStyle={{ fontSize: 12 }}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 12 }} />
+                    <Line
+                      type="monotone"
+                      dataKey="total_value"
+                      name="Valor Atual"
+                      stroke="#22c55e"
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="total_cost"
+                      name="Custo"
+                      stroke="#94a3b8"
+                      strokeWidth={2}
+                      dot={false}
+                      strokeDasharray="4 4"
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Portfolio Table */}
+          <div className="rounded-lg border overflow-auto">
+            <table className="w-full text-sm">
+              <thead className="border-b bg-muted/40">
+                <tr>
+                  {['Ticker', 'Empresa', 'Qtd', 'Preço Médio', 'Preço Atual', 'Valor Atual', 'Custo', 'P&L', 'P&L (%)', 'DY%', 'Div. Anual Est.', 'Peso %', ''].map((h) => (
+                    <th key={h} className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {enrichedRows.map((r) => (
+                  <tr key={r.id} className="hover:bg-muted/30 transition-colors">
+                    <td className="px-3 py-2 font-medium">
+                      <Link to={`/analysis/${r.ticker}`} className="text-primary hover:underline">{r.ticker}</Link>
+                    </td>
+                    <td className="px-3 py-2 text-muted-foreground max-w-[160px] truncate">{r.company_name ?? '-'}</td>
+                    <td className="px-3 py-2">{r.quantity}</td>
+                    <td className="px-3 py-2">{fmt(r.avg_price, r.currency)}</td>
+                    <td className="px-3 py-2">{r.current_price != null ? fmt(r.current_price, r.currency) : '-'}</td>
+                    <td className="px-3 py-2">{r.current_value != null ? fmt(r.current_value, r.currency) : '-'}</td>
+                    <td className="px-3 py-2">{r.cost_basis != null ? fmt(r.cost_basis, r.currency) : '-'}</td>
+                    <td className={`px-3 py-2 font-medium ${(r.pl_abs ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      <span className="flex items-center gap-1">
+                        {(r.pl_abs ?? 0) >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
+                        {r.pl_abs != null ? fmt(r.pl_abs, r.currency) : '-'}
+                      </span>
+                    </td>
+                    <td className={`px-3 py-2 font-medium ${(r.pl_pct ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {r.pl_pct != null ? fmtPct(r.pl_pct) : '-'}
+                    </td>
+                    <td className="px-3 py-2">{r.dividend_yield != null ? `${(r.dividend_yield * 100).toFixed(2)}%` : '-'}</td>
+                    <td className="px-3 py-2">{r.annual_div != null ? fmt(r.annual_div, r.currency) : '-'}</td>
+                    <td className="px-3 py-2">{r.weight != null ? `${(r.weight * 100).toFixed(1)}%` : '-'}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => {
+                            setEditRow(r)
+                            setEditQty(String(r.quantity))
+                            setEditAvg(String(r.avg_price))
+                            setEditError(null)
+                            setEditOpen(true)
+                          }}
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-destructive hover:text-destructive"
+                          onClick={() => setDeleteId(r.id)}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {enrichedRows.length === 0 && (
+                  <tr><td colSpan={13} className="px-3 py-12 text-center text-muted-foreground">Nenhuma posição no portfólio. Adicione seu primeiro ativo.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </TabsContent>
+
+        {/* ── Tab 2: Dividend Tracker ── */}
+        <TabsContent value="dividends" className="mt-4">
+          <DividendTrackerTab rows={enrichedRows} />
+        </TabsContent>
+      </Tabs>
 
       {/* Edit Dialog */}
       <Dialog open={editOpen} onOpenChange={(o) => { setEditOpen(o); if (!o) setEditError(null) }}>
