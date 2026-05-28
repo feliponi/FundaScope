@@ -211,11 +211,12 @@ export function calcWeight(
 
 export function fmtCurrency(
   value: number | null | undefined,
-  currency = 'BRL',
-  locale = 'pt-BR'
+  currency: string | null | undefined = 'BRL'
 ): string {
   if (value == null) return '-'
-  return value.toLocaleString(locale, { style: 'currency', currency, maximumFractionDigits: 2 })
+  const cur = currency ?? 'BRL'
+  const locale = cur === 'BRL' ? 'pt-BR' : 'en-US'
+  return value.toLocaleString(locale, { style: 'currency', currency: cur, maximumFractionDigits: 2 })
 }
 
 export function fmtPct(value: number | null | undefined, decimals = 2): string {

@@ -285,7 +285,11 @@ def update_prices(tickers: list[str]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def calc_earnings_growth_5y(ticker_obj: yf.Ticker) -> Optional[float]:
-    """Compute 5-year earnings CAGR from annual net income."""
+    """Compute 5-year earnings CAGR from annual net income.
+
+    Requires at least 3 annual data points (2 intervals) to avoid inflated
+    CAGR from a single-year jump (e.g. post-COVID earnings recovery).
+    """
     try:
         financials = ticker_obj.financials  # columns = dates, rows = line items
         if financials is None or financials.empty:
@@ -297,12 +301,12 @@ def calc_earnings_growth_5y(ticker_obj: yf.Ticker) -> Optional[float]:
                 ni_row = financials.loc[label].dropna()
                 break
 
-        if ni_row is None or len(ni_row) < 2:
+        if ni_row is None or len(ni_row) < 3:          # need ≥ 3 points → ≥ 2 intervals
             return None
 
         ni_sorted = ni_row.sort_index(ascending=True)
-        n_periods = min(len(ni_sorted) - 1, 4)  # up to 4 years = 5 data points
-        if n_periods < 1:
+        n_periods = min(len(ni_sorted) - 1, 4)         # up to 4 years = 5 data points
+        if n_periods < 2:                               # enforce minimum of 2 intervals
             return None
 
         start = float(ni_sorted.iloc[-(n_periods + 1)])
@@ -312,6 +316,13 @@ def calc_earnings_growth_5y(ticker_obj: yf.Ticker) -> Optional[float]:
             return None
 
         cagr = (end / start) ** (1 / n_periods) - 1
+
+        # Sanity cap: CAGR > 100 % p.a. is almost certainly bad data
+        if cagr > 1.0:
+            log.warning("Implausibly high earnings CAGR (%.1f%%) for %s — discarding",
+                        cagr * 100, getattr(ticker_obj, "ticker", "?"))
+            return None
+
         return cagr
     except Exception as exc:
         log.warning("Could not compute 5y earnings growth: %s", exc)

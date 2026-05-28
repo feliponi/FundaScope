@@ -39,6 +39,7 @@ type PortfolioRow = {
   quantity: number
   avg_price: number
   company_name?: string | null
+  currency?: string | null
   current_price?: number | null
   dividend_yield?: number | null
 }
@@ -84,7 +85,7 @@ export default function Portfolio() {
       supabase.from('portfolios').select('*').eq('user_id', user.id),
       supabase.from('stock_prices').select('ticker, price'),
       supabase.from('stock_fundamentals').select('ticker, dividend_yield'),
-      supabase.from('stock_profiles').select('ticker, company_name'),
+      supabase.from('stock_profiles').select('ticker, company_name, currency'),
       supabase.from('tickers').select('ticker'),
     ])
 
@@ -92,11 +93,12 @@ export default function Portfolio() {
 
     const priceMap = new Map((pricesRes.data ?? []).map((r) => [r.ticker, r.price]))
     const fundMap = new Map((fundRes.data ?? []).map((r) => [r.ticker, r.dividend_yield]))
-    const profileMap = new Map((profilesRes.data ?? []).map((r) => [r.ticker, r.company_name]))
+    const profileMap = new Map((profilesRes.data ?? []).map((r) => [r.ticker, r]))
 
     const enriched = (portfolioRes.data ?? []).map((p) => ({
       ...p,
-      company_name: profileMap.get(p.ticker) ?? null,
+      company_name: profileMap.get(p.ticker)?.company_name ?? null,
+      currency: profileMap.get(p.ticker)?.currency ?? null,
       current_price: priceMap.get(p.ticker) ?? null,
       dividend_yield: fundMap.get(p.ticker) ?? null,
     }))
@@ -105,7 +107,7 @@ export default function Portfolio() {
     const heldTickers = new Set(enriched.map((r) => r.ticker))
     const allTickers = (tickersRes.data ?? []).map((t) => ({
       ticker: t.ticker,
-      company_name: profileMap.get(t.ticker) ?? null,
+      company_name: profileMap.get(t.ticker)?.company_name ?? null,
     })).filter((t) => !heldTickers.has(t.ticker))
     setTickers(allTickers)
 
@@ -247,11 +249,11 @@ export default function Portfolio() {
       {/* Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {[
-          { label: 'Total Investido', value: fmtCurrency(summary.totalInvested) },
-          { label: 'Valor Atual', value: fmtCurrency(summary.totalValue) },
+          { label: 'Total Investido *', value: summary.totalInvested.toLocaleString('pt-BR', { maximumFractionDigits: 2 }) },
+          { label: 'Valor Atual *', value: summary.totalValue.toLocaleString('pt-BR', { maximumFractionDigits: 2 }) },
           {
-            label: 'P&L (R$)',
-            value: fmtCurrency(summary.totalPl),
+            label: 'P&L *',
+            value: summary.totalPl.toLocaleString('pt-BR', { maximumFractionDigits: 2, signDisplay: 'exceptZero' }),
             color: summary.totalPl >= 0 ? 'text-green-600' : 'text-red-600',
           },
           {
@@ -259,7 +261,7 @@ export default function Portfolio() {
             value: fmtPct(summary.totalPlPct),
             color: (summary.totalPlPct ?? 0) >= 0 ? 'text-green-600' : 'text-red-600',
           },
-          { label: 'Dividendos Anuais Est.', value: fmtCurrency(summary.totalDiv) },
+          { label: 'Div. Anuais Est. *', value: summary.totalDiv.toLocaleString('pt-BR', { maximumFractionDigits: 2 }) },
           { label: 'Yield do Portfólio', value: fmtPct(summary.portfolioYield) },
         ].map((c) => (
           <Card key={c.label}>
@@ -272,13 +274,16 @@ export default function Portfolio() {
           </Card>
         ))}
       </div>
+      <p className="text-xs text-muted-foreground -mt-2">
+        * Totais somados na moeda original de cada ativo (sem conversão cambial).
+      </p>
 
       {/* Portfolio Table */}
       <div className="rounded-lg border overflow-auto">
         <table className="w-full text-sm">
           <thead className="border-b bg-muted/40">
             <tr>
-              {['Ticker', 'Empresa', 'Qtd', 'Preço Médio', 'Preço Atual', 'Valor Atual', 'Custo', 'P&L (R$)', 'P&L (%)', 'DY%', 'Div. Anual Est.', 'Peso %', ''].map((h) => (
+              {['Ticker', 'Empresa', 'Qtd', 'Preço Médio', 'Preço Atual', 'Valor Atual', 'Custo', 'P&L', 'P&L (%)', 'DY%', 'Div. Anual Est.', 'Peso %', ''].map((h) => (
                 <th key={h} className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">{h}</th>
               ))}
             </tr>
@@ -291,21 +296,21 @@ export default function Portfolio() {
                 </td>
                 <td className="px-3 py-2 text-muted-foreground max-w-[160px] truncate">{r.company_name ?? '-'}</td>
                 <td className="px-3 py-2">{r.quantity}</td>
-                <td className="px-3 py-2">{fmtCurrency(r.avg_price)}</td>
-                <td className="px-3 py-2">{r.current_price != null ? fmtCurrency(r.current_price) : '-'}</td>
-                <td className="px-3 py-2">{r.current_value != null ? fmtCurrency(r.current_value) : '-'}</td>
-                <td className="px-3 py-2">{r.cost_basis != null ? fmtCurrency(r.cost_basis) : '-'}</td>
+                <td className="px-3 py-2">{fmtCurrency(r.avg_price, r.currency)}</td>
+                <td className="px-3 py-2">{r.current_price != null ? fmtCurrency(r.current_price, r.currency) : '-'}</td>
+                <td className="px-3 py-2">{r.current_value != null ? fmtCurrency(r.current_value, r.currency) : '-'}</td>
+                <td className="px-3 py-2">{r.cost_basis != null ? fmtCurrency(r.cost_basis, r.currency) : '-'}</td>
                 <td className={`px-3 py-2 font-medium ${(r.pl_abs ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                   <span className="flex items-center gap-1">
                     {(r.pl_abs ?? 0) >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-                    {r.pl_abs != null ? fmtCurrency(r.pl_abs) : '-'}
+                    {r.pl_abs != null ? fmtCurrency(r.pl_abs, r.currency) : '-'}
                   </span>
                 </td>
                 <td className={`px-3 py-2 font-medium ${(r.pl_pct ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                   {r.pl_pct != null ? fmtPct(r.pl_pct) : '-'}
                 </td>
                 <td className="px-3 py-2">{r.dividend_yield != null ? `${(r.dividend_yield * 100).toFixed(2)}%` : '-'}</td>
-                <td className="px-3 py-2">{r.annual_div != null ? fmtCurrency(r.annual_div) : '-'}</td>
+                <td className="px-3 py-2">{r.annual_div != null ? fmtCurrency(r.annual_div, r.currency) : '-'}</td>
                 <td className="px-3 py-2">{r.weight != null ? `${(r.weight * 100).toFixed(1)}%` : '-'}</td>
                 <td className="px-3 py-2">
                   <div className="flex items-center gap-1">
