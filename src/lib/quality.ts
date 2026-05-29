@@ -10,11 +10,13 @@ import {
   calcEVEBITDARelative,
   calcDDM,
   calculateDCF,
+  checkDCFApplicability,
   type StockFundamentals,
   type AnalystData,
   type ProfileResult,
   type DataQualityResult,
   type QualityScoreResult,
+  type DCFApplicability,
 } from './calculations'
 
 /** Default cost of equity for DDM in batch contexts (Analysis lets the user tune it). */
@@ -28,6 +30,7 @@ export type QualityComputation = {
   quality: QualityScoreResult
   profileResult: ProfileResult
   dataQuality: DataQualityResult
+  dcfApplicability: DCFApplicability
 }
 
 /**
@@ -57,10 +60,13 @@ export function computeQuality(
   analyst: AnalystData | null,
   sector: string | null,
   sectorPeerValues: number[],
+  industry: string | null = null,
+  ticker: string | null = null,
 ): QualityComputation | null {
   if (fundamentals == null || price == null || price <= 0) return null
 
   const profileResult = detectCompanyProfile(fundamentals)
+  const dcfApplicability = checkDCFApplicability(sector, industry, ticker)
 
   // EV/EBITDA relative — exclude the ticker's own value from the peer set so it
   // is measured against peers, not itself.
@@ -70,19 +76,23 @@ export function computeQuality(
   const hasSector = !!sector
   const dataQuality = calcDataQuality(fundamentals, analyst, peers.length, hasSector)
 
-  // DCF — only when FCF and shares are present and positive.
+  // DCF — only when the sector allows it and FCF/shares are present and positive.
   const fcf = fundamentals.free_cash_flow
   const shares = fundamentals.shares_outstanding
   let dcfResult = null
-  if (fcf != null && fcf > 0 && shares != null && shares > 0) {
+  if (dcfApplicability.applicable && fcf != null && fcf > 0 && shares != null && shares > 0) {
     const g = Math.max(0, Math.min(fundamentals.earnings_growth_5y ?? 0.05, 0.25))
-    dcfResult = calculateDCF({
-      freeCashFlow: fcf,
-      sharesOutstanding: shares,
-      growthRate: g,
-      discountRate: DEFAULT_DISCOUNT_RATE,
-      years: DEFAULT_DCF_YEARS,
-    })
+    dcfResult = calculateDCF(
+      {
+        freeCashFlow: fcf,
+        sharesOutstanding: shares,
+        growthRate: g,
+        discountRate: DEFAULT_DISCOUNT_RATE,
+        years: DEFAULT_DCF_YEARS,
+      },
+      price,
+      dcfApplicability,
+    )
   }
 
   const ddmResult = calcDDM(fundamentals.dps, fundamentals.earnings_growth_5y, DEFAULT_KE, price)
@@ -96,7 +106,8 @@ export function computeQuality(
     ddmResult,
     dataQuality,
     profile: profileResult.profile,
+    dcfApplicability,
   })
 
-  return { quality, profileResult, dataQuality }
+  return { quality, profileResult, dataQuality, dcfApplicability }
 }

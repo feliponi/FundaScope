@@ -35,6 +35,7 @@ import argparse
 import logging
 import os
 import random
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -107,6 +108,33 @@ def safe_float(val: Any) -> Optional[float]:
 def safe_int(val: Any) -> Optional[int]:
     f = safe_float(val)
     return int(f) if f is not None else None
+
+
+def check_dcf_applicability_python(
+    sector: Optional[str],
+    industry: Optional[str],
+    ticker: Optional[str],
+) -> tuple[bool, str]:
+    """Mirror of checkDCFApplicability() in src/lib/calculations.ts.
+
+    Returns (applicable, exclusion) where exclusion is one of
+    BANK, INSURANCE, REIT, HOLDING, NONE. Banks, insurers, REITs/FIIs and
+    consolidated holdings report cash flows that are not FCF to equity, so
+    standard DCF is excluded for them.
+    """
+    s = sector or ""
+    ind = industry or ""
+    tk = ticker or ""
+
+    if re.search(r"financial", s, re.I) and re.search(r"bank|banks—|capital markets", ind, re.I):
+        return (False, "BANK")
+    if re.search(r"insurance", ind, re.I) or re.search(r"reinsurance", ind, re.I):
+        return (False, "INSURANCE")
+    if re.search(r"reit|real estate", ind, re.I) or re.search(r"11\.SA$", tk, re.I):
+        return (False, "REIT")
+    if re.search(r"asset management|holding|diversified financial", ind, re.I):
+        return (False, "HOLDING")
+    return (True, "NONE")
 
 
 def get_tickers(mode: str, single_ticker: Optional[str]) -> list[str]:
@@ -618,16 +646,21 @@ def update_fundamentals_and_profiles(tickers: list[str], include_profile: bool =
         # ---- profile row (init mode only) ----
         profile_row: Optional[dict[str, Any]] = None
         if include_profile:
+            sector = info.get("sector")
+            industry = info.get("industry")
+            dcf_applicable, valuation_exclusion = check_dcf_applicability_python(sector, industry, tkr)
             profile_row = {
                 "ticker": tkr,
                 "company_name": info.get("longName") or info.get("shortName"),
-                "sector": info.get("sector"),
-                "industry": info.get("industry"),
+                "sector": sector,
+                "industry": industry,
                 "country": info.get("country"),
                 "currency": info.get("currency"),
                 "exchange": info.get("exchange"),
                 "website": info.get("website"),
                 "description": info.get("longBusinessSummary"),
+                "dcf_applicable": dcf_applicable,
+                "valuation_exclusion": valuation_exclusion,
                 "profile_updated_at": now_utc(),
             }
 
@@ -743,6 +776,53 @@ def update_analyst_data(tickers: list[str]) -> list[str]:
     return failed
 
 
+def refresh_profiles(tickers: list[str]) -> list[str]:
+    """Re-fetch profile data only and update stock_profiles (including the
+    dcf_applicable / valuation_exclusion hint). Does NOT touch prices or
+    fundamentals. Returns failed tickers."""
+    failed: list[str] = []
+
+    for idx, tkr in enumerate(tickers, 1):
+        if idx % LOG_PROGRESS_EVERY == 0:
+            log.info("Profile refresh progress: %d/%d tickers processed", idx, len(tickers))
+
+        info, _ = fetch_info_with_retry(tkr)
+        if info is None:
+            failed.append(tkr)
+            time.sleep(random.uniform(INFO_DELAY_MIN, INFO_DELAY_MAX))
+            continue
+
+        sector = info.get("sector")
+        industry = info.get("industry")
+        dcf_applicable, valuation_exclusion = check_dcf_applicability_python(sector, industry, tkr)
+
+        profile_row = {
+            "ticker": tkr,
+            "company_name": info.get("longName") or info.get("shortName"),
+            "sector": sector,
+            "industry": industry,
+            "country": info.get("country"),
+            "currency": info.get("currency"),
+            "exchange": info.get("exchange"),
+            "website": info.get("website"),
+            "description": info.get("longBusinessSummary"),
+            "dcf_applicable": dcf_applicable,
+            "valuation_exclusion": valuation_exclusion,
+            "profile_updated_at": now_utc(),
+        }
+
+        try:
+            supabase.table("stock_profiles").upsert(profile_row, on_conflict="ticker").execute()
+            log.info("Profile refreshed for %s (dcf_applicable=%s exclusion=%s)", tkr, dcf_applicable, valuation_exclusion)
+        except Exception as exc:
+            log.error("Supabase profile write failed for %s: %s", tkr, exc)
+            failed.append(tkr)
+
+        time.sleep(random.uniform(INFO_DELAY_MIN, INFO_DELAY_MAX))
+
+    return failed
+
+
 def mark_tickers_updated(tickers: list[str]) -> None:
     """Set last_update = NOW() for successfully processed tickers."""
     ts = now_utc()
@@ -789,6 +869,15 @@ def main() -> None:
         metavar="FILE",
         help="seed mode only: path to a CSV file with a 'ticker' column to bulk-insert.",
     )
+    parser.add_argument(
+        "--refresh-profiles",
+        action="store_true",
+        help=(
+            "Re-fetch and update only profile data (company info + dcf_applicable / "
+            "valuation_exclusion) for already-initialized tickers, without touching "
+            "prices or fundamentals. Respects --ticker to restrict to one ticker."
+        ),
+    )
     args = parser.parse_args()
 
     mode: str = args.mode
@@ -797,6 +886,25 @@ def main() -> None:
 
     if mode == "seed":
         seed_tickers(single_ticker, csv_file)
+        return
+
+    # Profile-only refresh: ignore normal mode flow, update stock_profiles only.
+    if args.refresh_profiles:
+        if single_ticker:
+            tickers = [single_ticker.strip().upper()]
+        else:
+            res = supabase.table("tickers").select("ticker").not_.is_("last_update", "null").execute()
+            tickers = [r["ticker"] for r in (res.data or [])]
+        if not tickers:
+            log.info("No initialized tickers to refresh. Exiting.")
+            return
+        log.info("=== Profile refresh started | tickers=%d ===", len(tickers))
+        failed = refresh_profiles(tickers)
+        if failed:
+            all_failed = retry_failed(failed, refresh_profiles)
+            if all_failed:
+                log.warning("Profiles still failed after retry: %s", all_failed)
+        log.info("=== Profile refresh done ===")
         return
 
     log.info("=== FundaScope update started | mode=%s ticker=%s ===", mode, single_ticker or "all")
