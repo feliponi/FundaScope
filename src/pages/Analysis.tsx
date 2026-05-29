@@ -18,8 +18,10 @@ import {
   fmtNumber,
   fmtLargeNumber,
   calculateDCF,
+  calcEVEBITDARelative,
+  calcDDM,
 } from '@/lib/calculations'
-import type { DCFResult } from '@/lib/calculations'
+import type { DCFResult, EVEBITDARelativeResult, DDMResult } from '@/lib/calculations'
 import { useCurrency } from '@/lib/currency'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -251,6 +253,63 @@ function PriceTargetTrack({
             <div className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: m.color }} />
             <span className="text-muted-foreground">{m.label}:</span>
             <span className="font-medium">{fmt(m.value, currency)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function EVPositionTrack({
+  tickerValue, sectorMin, sectorMedian, sectorMax,
+}: {
+  tickerValue: number; sectorMin: number; sectorMedian: number; sectorMax: number
+}) {
+  if (sectorMax <= sectorMin) return null
+  const padding = (sectorMax - sectorMin) * 0.08
+  const domainMin = Math.min(sectorMin, tickerValue) - padding
+  const domainMax = Math.max(sectorMax, tickerValue) + padding
+  const domainRange = domainMax - domainMin
+  const pct = (v: number) => Math.max(0.5, Math.min(99.5, ((v - domainMin) / domainRange) * 100))
+
+  const markers: { id: string; value: number; label: string; color: string; thick?: boolean }[] = [
+    { id: 'min',    value: sectorMin,    label: 'Mín. Setor',  color: '#22c55e' },
+    { id: 'median', value: sectorMedian, label: 'Mediana',     color: '#3b82f6' },
+    { id: 'max',    value: sectorMax,    label: 'Máx. Setor',  color: '#ef4444' },
+    { id: 'ticker', value: tickerValue,  label: 'Ticker',      color: '#0f172a', thick: true },
+  ]
+
+  return (
+    <div>
+      <div className="relative h-4 my-3">
+        <div
+          className="absolute inset-y-0 rounded-full"
+          style={{
+            left: `${pct(sectorMin)}%`,
+            right: `${100 - pct(sectorMax)}%`,
+            background: 'linear-gradient(to right, #86efac, #fde68a, #fca5a5)',
+          }}
+        />
+        {markers.map((m) => (
+          <div
+            key={m.id}
+            className="absolute top-0 bottom-0"
+            style={{
+              left: `${pct(m.value)}%`,
+              width: m.thick ? 3 : 2,
+              backgroundColor: m.color,
+              transform: 'translateX(-50%)',
+            }}
+            title={`${m.label}: ${m.value.toFixed(2)}x`}
+          />
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+        {markers.map((m) => (
+          <div key={m.id} className="flex items-center gap-1.5">
+            <div className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: m.color }} />
+            <span className="text-muted-foreground">{m.label}:</span>
+            <span className="font-medium">{m.value.toFixed(2)}x</span>
           </div>
         ))}
       </div>
@@ -625,6 +684,11 @@ export default function Analysis() {
   const [dcfDiscountRate, setDcfDiscountRate] = useState(0.10)
   const [dcfYears, setDcfYears] = useState(10)
 
+  // Relativo tab
+  const [sectorPeers, setSectorPeers] = useState<number[]>([])
+  const [sectorPeersLoading, setSectorPeersLoading] = useState(false)
+  const [keRate, setKeRate] = useState(0.10)
+
   const [disclaimerCollapsed, setDisclaimerCollapsed] = useState(() => {
     try { return localStorage.getItem('disclaimer_graham_collapsed') === 'true' } catch { return false }
   })
@@ -642,6 +706,11 @@ export default function Analysis() {
   useEffect(() => {
     if (ticker) { fetchAll(); fetchAlerts(); fetchNote() }
   }, [ticker])
+
+  useEffect(() => {
+    if (profile?.sector) fetchSectorPeers(profile.sector)
+    else setSectorPeers([])
+  }, [profile?.sector])
 
   useEffect(() => {
     if (compareTickers.length > 0) fetchCompareData(compareTickers)
@@ -664,6 +733,16 @@ export default function Analysis() {
     if (dcfDiscountRate <= 0.03) return null
     return calculateDCF({ freeCashFlow: fcf, sharesOutstanding: shares, growthRate: dcfGrowthRate, discountRate: dcfDiscountRate, years: dcfYears })
   }, [fundamentals, dcfGrowthRate, dcfDiscountRate, dcfYears])
+
+  const evResult = useMemo<EVEBITDARelativeResult | null>(
+    () => calcEVEBITDARelative(fundamentals?.ev_ebitda, sectorPeers),
+    [fundamentals?.ev_ebitda, sectorPeers],
+  )
+
+  const ddmResult = useMemo<DDMResult | null>(
+    () => calcDDM(fundamentals?.dps, fundamentals?.earnings_growth_5y, keRate, price),
+    [fundamentals?.dps, fundamentals?.earnings_growth_5y, keRate, price],
+  )
 
   const dcfChartData = useMemo(() => {
     if (!dcfResult) return []
@@ -699,6 +778,27 @@ export default function Analysis() {
     setPosition(posRes.data as PortfolioPos | null)
     setAnalystData(analystRes.data as AnalystData | null)
     setLoading(false)
+  }
+
+  // ----- Sector peers for Relativo tab -----
+  async function fetchSectorPeers(sector: string) {
+    setSectorPeersLoading(true)
+    setSectorPeers([])
+    const { data: profileRows } = await supabase
+      .from('stock_profiles')
+      .select('ticker')
+      .eq('sector', sector)
+    if (!profileRows || profileRows.length === 0) { setSectorPeersLoading(false); return }
+    const tickers = profileRows.map((r) => r.ticker)
+    const { data: fundRows } = await supabase
+      .from('stock_fundamentals')
+      .select('ev_ebitda')
+      .in('ticker', tickers)
+      .not('ev_ebitda', 'is', null)
+      .gt('ev_ebitda', 0)
+    const values = (fundRows ?? []).map((r) => r.ev_ebitda as number).filter(isFinite)
+    setSectorPeers(values)
+    setSectorPeersLoading(false)
   }
 
   // ----- Alerts -----
@@ -996,12 +1096,13 @@ export default function Analysis() {
         </Card>
       )}
 
-      {/* Valuation Tabs: Graham | Bazin | DCF */}
+      {/* Valuation Tabs: Graham | Bazin | DCF | Relativo */}
       <Tabs defaultValue="graham">
         <TabsList className="mb-4">
           <TabsTrigger value="graham">Graham</TabsTrigger>
           <TabsTrigger value="bazin">Bazin</TabsTrigger>
           <TabsTrigger value="dcf">DCF</TabsTrigger>
+          <TabsTrigger value="relativo">Relativo</TabsTrigger>
         </TabsList>
 
         <TabsContent value="graham">
@@ -1232,6 +1333,145 @@ export default function Analysis() {
                   )}
                 </>
               )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="relativo">
+          <Card>
+            <CardHeader><CardTitle className="text-base">Valuation Relativo</CardTitle></CardHeader>
+            <CardContent className="space-y-6">
+
+              {/* EV/EBITDA Relative */}
+              <div>
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">
+                  EV/EBITDA vs Setor
+                </h4>
+                {!profile?.sector ? (
+                  <div className="flex items-start gap-2 rounded-md bg-muted/50 border p-4 text-sm text-muted-foreground">
+                    <Info className="h-4 w-4 mt-0.5 shrink-0" />
+                    <span>Setor não disponível para este ticker.</span>
+                  </div>
+                ) : sectorPeersLoading ? (
+                  <div className="text-sm text-muted-foreground">Carregando dados do setor…</div>
+                ) : f?.ev_ebitda == null ? (
+                  <div className="flex items-start gap-2 rounded-md bg-muted/50 border p-4 text-sm text-muted-foreground">
+                    <Info className="h-4 w-4 mt-0.5 shrink-0" />
+                    <span>EV/EBITDA não disponível para este ticker.</span>
+                  </div>
+                ) : evResult == null ? (
+                  <div className="flex items-start gap-2 rounded-md bg-muted/50 border p-4 text-sm text-muted-foreground">
+                    <Info className="h-4 w-4 mt-0.5 shrink-0" />
+                    <span>
+                      Dados insuficientes para comparação setorial (mínimo 3 empresas com EV/EBITDA no setor <strong>{profile.sector}</strong>; encontradas {sectorPeers.length}).
+                    </span>
+                  </div>
+                ) : (
+                  <>
+                    <EVPositionTrack
+                      tickerValue={evResult.tickerValue}
+                      sectorMin={evResult.sectorMin}
+                      sectorMedian={evResult.sectorMedian}
+                      sectorMax={evResult.sectorMax}
+                    />
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
+                      <div className="rounded-lg border bg-muted/30 p-3">
+                        <div className="text-xs text-muted-foreground mb-1">EV/EBITDA Ticker</div>
+                        <div className="text-lg font-bold">{fmtNumber(evResult.tickerValue)}</div>
+                      </div>
+                      <div className="rounded-lg border bg-muted/30 p-3">
+                        <div className="text-xs text-muted-foreground mb-1">Mediana Setor</div>
+                        <div className="text-lg font-bold">{fmtNumber(evResult.sectorMedian)}</div>
+                      </div>
+                      <div className="rounded-lg border bg-muted/30 p-3">
+                        <div className="text-xs text-muted-foreground mb-1">Prêmio/Desconto</div>
+                        <div className={`text-lg font-bold ${evResult.premium > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          {fmtPct(evResult.premium)}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border bg-muted/30 p-3">
+                        <div className="text-xs text-muted-foreground mb-1">Sinal</div>
+                        <Badge variant={evResult.signal === 'CHEAP' ? 'success' : evResult.signal === 'EXPENSIVE' ? 'danger' : 'warning'}>
+                          {evResult.signal === 'CHEAP' ? 'BARATO' : evResult.signal === 'EXPENSIVE' ? 'CARO' : 'JUSTO'}
+                        </Badge>
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Comparando com {evResult.sectorCount} empresas do setor <strong>{profile.sector}</strong>.
+                      Intervalo setorial: {fmtNumber(evResult.sectorMin)}x – {fmtNumber(evResult.sectorMax)}x.
+                      Prêmio &gt;+20% = CARO; desconto &gt;20% = BARATO.
+                    </p>
+                  </>
+                )}
+              </div>
+
+              <div className="border-t pt-4">
+                {/* DDM */}
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">
+                  Modelo Gordon (DDM)
+                </h4>
+                {f?.dps == null || f.dps <= 0 ? (
+                  <div className="flex items-start gap-2 rounded-md bg-muted/50 border p-4 text-sm text-muted-foreground">
+                    <Info className="h-4 w-4 mt-0.5 shrink-0" />
+                    <span>DPS (dividendo por ação) não disponível ou zero para este ticker. DDM aplica-se apenas a pagadores de dividendos.</span>
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-3 mb-4">
+                      <div className="flex items-center gap-3">
+                        <Label className="w-52 text-xs shrink-0">
+                          Taxa de Retorno Exigida (Ke): <span className="font-bold">{(keRate * 100).toFixed(1)}%</span>
+                        </Label>
+                        <input
+                          type="range" min={1} max={30} step={0.5}
+                          value={keRate * 100}
+                          onChange={(e) => setKeRate(parseFloat(e.target.value) / 100)}
+                          className="flex-1 accent-primary"
+                        />
+                      </div>
+                    </div>
+                    {ddmResult == null ? (
+                      <div className="flex items-start gap-2 rounded-md bg-muted/50 border p-4 text-sm text-muted-foreground">
+                        <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                        <span>
+                          Ke ({(keRate * 100).toFixed(1)}%) deve ser maior que g ({f.earnings_growth_5y != null ? (Math.min(Math.max(f.earnings_growth_5y, 0), 0.25) * 100).toFixed(1) : '0.0'}%).
+                          Aumente a taxa de retorno exigida.
+                        </span>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-3">
+                          <div className="rounded-lg border bg-muted/30 p-3">
+                            <div className="text-xs text-muted-foreground mb-1">Preço Justo DDM</div>
+                            <div className="text-lg font-bold">{fmt(ddmResult.fairPrice, profile?.currency)}</div>
+                          </div>
+                          <div className="rounded-lg border bg-muted/30 p-3">
+                            <div className="text-xs text-muted-foreground mb-1">Preço Atual</div>
+                            <div className="text-lg font-bold">{price != null ? fmt(price, profile?.currency) : '-'}</div>
+                          </div>
+                          <div className="rounded-lg border bg-muted/30 p-3">
+                            <div className="text-xs text-muted-foreground mb-1">Upside</div>
+                            <div className={`text-lg font-bold ${ddmResult.upside >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {fmtPct(ddmResult.upside)}
+                            </div>
+                          </div>
+                          <div className="rounded-lg border bg-muted/30 p-3">
+                            <div className="text-xs text-muted-foreground mb-1">Sinal</div>
+                            <Badge variant={ddmResult.signal === 'COMPRA' ? 'success' : ddmResult.signal === 'NÃO COMPRA' ? 'danger' : 'warning'}>
+                              {ddmResult.signal}
+                            </Badge>
+                          </div>
+                        </div>
+                        <div className="text-xs text-muted-foreground space-y-0.5">
+                          <div>DPS: {fmt(ddmResult.dps, profile?.currency)} · Ke: {(ddmResult.ke * 100).toFixed(1)}% · g: {(ddmResult.g * 100).toFixed(1)}%</div>
+                          <div>Fórmula: P = DPS / (Ke − g). COMPRA se upside &gt;+15%; NÃO COMPRA se &lt;−15%.</div>
+                        </div>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+
             </CardContent>
           </Card>
         </TabsContent>
