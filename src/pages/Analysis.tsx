@@ -23,6 +23,7 @@ import {
   detectCompanyProfile,
   calcDataQuality,
   calcQualityScore,
+  checkDCFApplicability,
 } from '@/lib/calculations'
 import type { DCFResult, EVEBITDARelativeResult, DDMResult, ComponentScore } from '@/lib/calculations'
 import { StarRating, ProfileBadge, DataQualityBadge, qualityColorClasses } from '@/components/quality'
@@ -749,14 +750,25 @@ export default function Analysis() {
     }
   }, [fundamentals?.earnings_growth_5y])
 
+  // Sector-based DCF applicability (banks, insurers, REITs/FIIs, holdings)
+  const dcfApplicability = useMemo(
+    () => checkDCFApplicability(profile?.sector ?? null, profile?.industry ?? null, ticker ?? null),
+    [profile?.sector, profile?.industry, ticker],
+  )
+
   // DCF result
   const dcfResult = useMemo<DCFResult | null>(() => {
+    if (!dcfApplicability.applicable) return null
     const fcf = fundamentals?.free_cash_flow ?? null
     const shares = fundamentals?.shares_outstanding ?? null
     if (fcf == null || shares == null || shares <= 0 || fcf <= 0) return null
     if (dcfDiscountRate <= 0.03) return null
-    return calculateDCF({ freeCashFlow: fcf, sharesOutstanding: shares, growthRate: dcfGrowthRate, discountRate: dcfDiscountRate, years: dcfYears })
-  }, [fundamentals, dcfGrowthRate, dcfDiscountRate, dcfYears])
+    return calculateDCF(
+      { freeCashFlow: fcf, sharesOutstanding: shares, growthRate: dcfGrowthRate, discountRate: dcfDiscountRate, years: dcfYears },
+      price ?? 0,
+      dcfApplicability,
+    )
+  }, [fundamentals, dcfGrowthRate, dcfDiscountRate, dcfYears, dcfApplicability, price])
 
   const evResult = useMemo<EVEBITDARelativeResult | null>(
     () => calcEVEBITDARelative(fundamentals?.ev_ebitda, sectorPeers),
@@ -783,9 +795,10 @@ export default function Analysis() {
       ddmResult,
       dataQuality,
       profile: profileResult.profile,
+      dcfApplicability,
     })
     return { profileResult, dataQuality, quality }
-  }, [fundamentals, price, analystData, dcfResult, evResult, ddmResult, sectorPeers, profile?.sector])
+  }, [fundamentals, price, analystData, dcfResult, evResult, ddmResult, sectorPeers, profile?.sector, dcfApplicability])
 
   const dcfChartData = useMemo(() => {
     if (!dcfResult) return []
@@ -1355,6 +1368,19 @@ export default function Analysis() {
           <Card>
             <CardHeader><CardTitle className="text-base">Fluxo de Caixa Descontado (DCF)</CardTitle></CardHeader>
             <CardContent className="space-y-5">
+              {/* Sector exclusion — DCF not recommended */}
+              {!dcfApplicability.applicable ? (
+                <div className="flex items-start gap-3 rounded-md border bg-muted/40 p-4 text-sm">
+                  <Info className="h-5 w-5 mt-0.5 shrink-0 text-muted-foreground" />
+                  <div className="space-y-2">
+                    <p className="font-semibold text-foreground">DCF não recomendado para este setor</p>
+                    <p className="text-muted-foreground">{dcfApplicability.reason}</p>
+                    <p className="text-muted-foreground"><span className="font-medium text-foreground">Método sugerido:</span> {dcfApplicability.alternative}</p>
+                    <p className="text-muted-foreground">Os outros métodos disponíveis para este ticker continuam funcionando: Graham, Bazin, EV/EBITDA Relativo, DDM e Insights de Analistas.</p>
+                  </div>
+                </div>
+              ) : (
+              <>
               {/* FCF unavailable */}
               {!hasFcf && (
                 <div className="flex items-start gap-2 rounded-md bg-muted/50 border p-4 text-sm text-muted-foreground">
@@ -1422,6 +1448,12 @@ export default function Analysis() {
                   {/* Results */}
                   {dcfResult && (
                     <>
+                      {dcfResult.warning && (
+                        <div className="flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 p-4 text-sm text-amber-800">
+                          <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                          <span>{dcfResult.warning}</span>
+                        </div>
+                      )}
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                         <div className="rounded-lg border bg-muted/30 p-3">
                           <div className="text-xs text-muted-foreground mb-1">Valor Intrínseco / Ação</div>
@@ -1464,6 +1496,8 @@ export default function Analysis() {
                     </>
                   )}
                 </>
+              )}
+              </>
               )}
             </CardContent>
           </Card>

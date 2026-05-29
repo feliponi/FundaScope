@@ -16,7 +16,7 @@ import { StarRating, ProfileBadge, QualityScoreBadge } from '@/components/qualit
 import { ArrowRight, Sparkles, TrendingUp, AlertCircle, Search } from 'lucide-react'
 
 type RawFund = StockFundamentals & { ticker: string }
-type ProfileMeta = { ticker: string; company_name: string | null; sector: string | null; currency: string | null }
+type ProfileMeta = { ticker: string; company_name: string | null; sector: string | null; industry: string | null; currency: string | null }
 type PriceRow = { ticker: string; price: number | null }
 type PortfolioPos = { ticker: string; quantity: number; avg_price: number }
 
@@ -49,7 +49,7 @@ export default function Dashboard() {
 
     const [fundRes, profRes, priceRes, analystRes, posRes] = await Promise.all([
       supabase.from('stock_fundamentals').select('*'),
-      supabase.from('stock_profiles').select('ticker, company_name, sector, currency'),
+      supabase.from('stock_profiles').select('ticker, company_name, sector, industry, currency'),
       supabase.from('stock_prices').select('ticker, price'),
       supabase.from('analyst_data').select('ticker, target_mean, rec_strong_buy, rec_buy, rec_hold, rec_underperform, rec_sell'),
       user
@@ -82,7 +82,7 @@ export default function Dashboard() {
       const sector = prof?.sector ?? null
       const price = priceMap.get(f.ticker) ?? null
       const peers = sector ? (peerMap.get(sector) ?? []) : []
-      const comp = computeQuality(f, price, analystMap.get(f.ticker) ?? null, sector, peers)
+      const comp = computeQuality(f, price, analystMap.get(f.ticker) ?? null, sector, peers, prof?.industry ?? null, f.ticker)
       if (!comp) continue
       out.set(f.ticker, {
         ticker: f.ticker,

@@ -323,3 +323,14 @@ CREATE POLICY "simulator_favorites_insert_own"
   ON simulator_favorites FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid());
 CREATE POLICY "simulator_favorites_delete_own"
   ON simulator_favorites FOR DELETE TO authenticated USING (user_id = auth.uid());
+
+-- ============================================================
+-- FEATURE 6 — DCF APPLICABILITY (sector-based valuation exclusions)
+-- ============================================================
+-- Materialized hint populated by the admin script (mirror of
+-- checkDCFApplicability in src/lib/calculations.ts). The TypeScript function
+-- remains the source of truth; these columns are an optimization cache.
+
+ALTER TABLE stock_profiles
+  ADD COLUMN IF NOT EXISTS dcf_applicable      BOOLEAN DEFAULT TRUE,
+  ADD COLUMN IF NOT EXISTS valuation_exclusion TEXT;

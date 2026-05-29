@@ -284,6 +284,7 @@ export type DCFResult = {
   pv: number                 // total present value (FCF years + terminal)
   terminalValue: number      // PV of terminal value
   intrinsicPerShare: number  // pv / sharesOutstanding, native currency
+  warning?: string           // set when output fails a sanity check
   years: Array<{
     year: number
     fcf: number              // projected FCF for this year
@@ -292,13 +293,103 @@ export type DCFResult = {
   }>
 }
 
+// ---------------------------------------------------------------------------
+// DCF APPLICABILITY — sector-based exclusions
+// ---------------------------------------------------------------------------
+
+export type ValuationExclusion =
+  | 'BANK'       // banks: deposits inflate FCF
+  | 'INSURANCE'  // insurers: float/reserves inflate FCF
+  | 'REIT'       // REITs/FIIs: use FFO/AFFO instead
+  | 'HOLDING'    // holdings: look-through valuation needed
+  | 'NONE'
+
+export interface DCFApplicability {
+  applicable: boolean
+  exclusion: ValuationExclusion
+  reason: string       // user-facing PT-BR explanation
+  alternative: string  // suggested alternative method
+}
+
+const DCF_APPLICABLE: DCFApplicability = {
+  applicable: true,
+  exclusion: 'NONE',
+  reason: '',
+  alternative: '',
+}
+
+/**
+ * Determine whether standard FCF-based DCF (and EBIT-based metrics) apply to a
+ * ticker. Banks, insurers, REITs/FIIs and consolidated holdings report cash
+ * flows (deposits, float, rental income) that are not free cash flow to equity,
+ * so DCF produces meaningless results for them.
+ */
+export function checkDCFApplicability(
+  sector: string | null,
+  industry: string | null,
+  ticker?: string | null,
+): DCFApplicability {
+  const s = sector ?? ''
+  const ind = industry ?? ''
+  const tk = ticker ?? ''
+
+  if (/financial/i.test(s) && /bank|banks—|capital markets/i.test(ind)) {
+    return {
+      applicable: false,
+      exclusion: 'BANK',
+      reason: 'Bancos têm fluxo de caixa dominado por depósitos e operações de crédito. DCF tradicional não se aplica.',
+      alternative: 'Avalie por P/VPA, ROE vs Custo de Capital, e qualidade da carteira de crédito.',
+    }
+  }
+
+  if (/insurance/i.test(ind) || /reinsurance/i.test(ind)) {
+    return {
+      applicable: false,
+      exclusion: 'INSURANCE',
+      reason: 'Seguradoras geram fluxo de caixa via prêmios e reservas (float), que não representam caixa livre para acionistas.',
+      alternative: 'Avalie por P/VPA, Combined Ratio, e qualidade dos investimentos do float.',
+    }
+  }
+
+  if (/reit|real estate/i.test(ind) || /11\.SA$/i.test(tk)) {
+    return {
+      applicable: false,
+      exclusion: 'REIT',
+      reason: 'REITs e FIIs reportam FFO (Funds From Operations) em vez de FCF tradicional. Métricas baseadas em EBIT também não se aplicam.',
+      alternative: 'Avalie por P/FFO, Dividend Yield, e Cap Rate.',
+    }
+  }
+
+  if (/asset management|holding|diversified financial/i.test(ind)) {
+    return {
+      applicable: false,
+      exclusion: 'HOLDING',
+      reason: 'Holdings consolidadas distorcem indicadores operacionais. Recomenda-se análise look-through.',
+      alternative: 'Avalie cada subsidiária separadamente quando possível.',
+    }
+  }
+
+  return { ...DCF_APPLICABLE }
+}
+
 const TERMINAL_GROWTH_RATE = 0.03
+const DCF_SANITY_HIGH = 10   // intrinsic > 10× price → suspect
+const DCF_SANITY_LOW = 0.1   // intrinsic < 0.1× price → suspect
 
 /**
  * DCF intrinsic value using Gordon Growth Model terminal value.
- * Returns null when discount rate ≤ terminal growth rate (3%) or inputs are invalid.
+ * Returns null when the sector excludes DCF, the discount rate ≤ terminal
+ * growth rate (3%), or inputs are invalid. When the output is implausible
+ * relative to currentPrice, the result carries a `warning` (but is still
+ * returned so the caller can show it with context).
  */
-export function calculateDCF(inputs: DCFInputs): DCFResult | null {
+export function calculateDCF(
+  inputs: DCFInputs,
+  currentPrice: number,
+  applicability: DCFApplicability = DCF_APPLICABLE,
+): DCFResult | null {
+  if (applicability.applicable === false) return null
+
   const { freeCashFlow, sharesOutstanding, growthRate, discountRate, years } = inputs
   if (!isValid(freeCashFlow, sharesOutstanding, growthRate, discountRate, years)) return null
   if (sharesOutstanding <= 0 || discountRate <= TERMINAL_GROWTH_RATE) return null
@@ -316,11 +407,23 @@ export function calculateDCF(inputs: DCFInputs): DCFResult | null {
   const terminalFcf = freeCashFlow * Math.pow(1 + growthRate, years + 1)
   const terminalValue = terminalFcf / ((discountRate - TERMINAL_GROWTH_RATE) * Math.pow(1 + discountRate, years))
   const totalPv = cumulativePv + terminalValue
+  const intrinsicPerShare = totalPv / sharesOutstanding
+
+  let warning: string | undefined
+  if (isValid(currentPrice) && currentPrice > 0) {
+    const sanityRatio = intrinsicPerShare / currentPrice
+    if (sanityRatio > DCF_SANITY_HIGH) {
+      warning = 'DCF produziu valor mais de 10× o preço atual. Provável distorção por FCF inflado, crescimento elevado, ou setor inadequado para este modelo. Verifique os inputs.'
+    } else if (sanityRatio < DCF_SANITY_LOW) {
+      warning = 'DCF produziu valor menos de 10% do preço atual. Empresa pode estar precificada por ativos intangíveis ou expectativas não capturadas pelo FCF histórico.'
+    }
+  }
 
   return {
     pv: totalPv,
     terminalValue,
-    intrinsicPerShare: totalPv / sharesOutstanding,
+    intrinsicPerShare,
+    ...(warning ? { warning } : {}),
     years: yearRows,
   }
 }
@@ -648,8 +751,10 @@ export function calcQualityScore(input: {
   ddmResult: DDMResult | null
   dataQuality: DataQualityResult
   profile: CompanyProfile
+  /** When DCF is excluded for the sector, its component is dropped and its weight redistributed. */
+  dcfApplicability?: DCFApplicability
 }): QualityScoreResult {
-  const { fundamentals: f, price, analystData, dcfResult, evEbitdaRelative, ddmResult, dataQuality, profile } = input
+  const { fundamentals: f, price, analystData, dcfResult, evEbitdaRelative, ddmResult, dataQuality, profile, dcfApplicability } = input
   const weights = QUALITY_WEIGHTS[profile]
   const paysDividend = f.dividend_yield != null && f.dividend_yield > 0.01
 
@@ -671,7 +776,8 @@ export function calcQualityScore(input: {
   }
 
   // --- dcf ---
-  const dcfApplicable = profile !== 'DISTRESSED'
+  const sectorAllowsDcf = dcfApplicability ? dcfApplicability.applicable : true
+  const dcfApplicable = profile !== 'DISTRESSED' && sectorAllowsDcf
   let dcfScore: number | null = null
   if (dcfApplicable && dcfResult != null) {
     const upside = calcIntrinsicUpside(dcfResult.intrinsicPerShare, price)

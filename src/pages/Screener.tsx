@@ -37,6 +37,7 @@ type ScreenerRow = {
   ticker: string
   company_name: string | null
   sector: string | null
+  industry: string | null
   currency: string | null
   price: number | null
   dividend_yield: number | null
@@ -167,7 +168,7 @@ export default function Screener() {
 
     const { data: priceData } = await supabase.from('stock_prices').select('ticker, price')
     const { data: fundData } = await supabase.from('stock_fundamentals').select('*')
-    const { data: profileData } = await supabase.from('stock_profiles').select('ticker, company_name, sector, currency')
+    const { data: profileData } = await supabase.from('stock_profiles').select('ticker, company_name, sector, industry, currency')
     const { data: analystRows } = await supabase
       .from('analyst_data')
       .select('ticker, target_mean, rec_strong_buy, rec_buy, rec_hold, rec_underperform, rec_sell')
@@ -185,6 +186,7 @@ export default function Screener() {
         ticker: t.ticker,
         company_name: p?.company_name ?? null,
         sector: p?.sector ?? null,
+        industry: p?.industry ?? null,
         currency: p?.currency ?? null,
         price: priceMap.get(t.ticker) ?? null,
         dividend_yield: f?.dividend_yield ?? null,
@@ -252,6 +254,8 @@ export default function Screener() {
         analystMap.get(r.ticker) ?? null,
         r.sector,
         peers,
+        r.industry,
+        r.ticker,
       )
       return {
         ...r,
