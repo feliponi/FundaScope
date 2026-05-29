@@ -3,11 +3,12 @@ import { BrowserRouter, Routes, Route, Navigate, NavLink, useNavigate } from 're
 import { supabase, supabaseReady } from '@/lib/supabase'
 import type { Session } from '@supabase/supabase-js'
 import Login from '@/pages/Login'
+import Dashboard from '@/pages/Dashboard'
 import Screener from '@/pages/Screener'
 import Portfolio from '@/pages/Portfolio'
 import Analysis from '@/pages/Analysis'
 import Simulator from '@/pages/Simulator'
-import { TrendingUp, BarChart2, Briefcase, LogOut, Bell, X, FlaskConical } from 'lucide-react'
+import { TrendingUp, BarChart2, Briefcase, LogOut, Bell, X, FlaskConical, Home } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { CurrencyProvider, useCurrency, type DisplayCurrency } from '@/lib/currency'
 
@@ -109,6 +110,10 @@ function Layout({ children, session }: { children: React.ReactNode; session: Ses
               FundaScope
             </NavLink>
             <nav className="flex items-center gap-1">
+              <NavLink to="/dashboard" className={navLinkClass}>
+                <Home className="h-4 w-4" />
+                Início
+              </NavLink>
               <NavLink to="/screener" className={navLinkClass}>
                 <BarChart2 className="h-4 w-4" />
                 Screener
@@ -148,7 +153,15 @@ function AuthGuard({ session, children }: { session: Session | null; children: R
 function AppRoutes({ session }: { session: Session | null }) {
   return (
     <Routes>
-      <Route path="/login" element={session ? <Navigate to="/screener" replace /> : <Login />} />
+      <Route path="/login" element={session ? <Navigate to="/dashboard" replace /> : <Login />} />
+      <Route
+        path="/dashboard"
+        element={
+          <AuthGuard session={session}>
+            <Layout session={session}><Dashboard /></Layout>
+          </AuthGuard>
+        }
+      />
       <Route
         path="/screener"
         element={
@@ -181,8 +194,8 @@ function AppRoutes({ session }: { session: Session | null }) {
           </AuthGuard>
         }
       />
-      <Route path="/" element={<Navigate to={session ? '/screener' : '/login'} replace />} />
-      <Route path="*" element={<Navigate to={session ? '/screener' : '/login'} replace />} />
+      <Route path="/" element={<Navigate to={session ? '/dashboard' : '/login'} replace />} />
+      <Route path="*" element={<Navigate to={session ? '/dashboard' : '/login'} replace />} />
     </Routes>
   )
 }

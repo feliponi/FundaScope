@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import {
   calcTeto8,
@@ -11,13 +11,17 @@ import {
   calcIntrinsicUpside,
   fmtNumber,
   fmtPct,
+  type StockFundamentals,
+  type AnalystData,
 } from '@/lib/calculations'
+import { buildSectorPeerMap, computeQuality, type QualityComputation } from '@/lib/quality'
 import { useCurrency } from '@/lib/currency'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import { QualityScoreBadge, ProfileBadge, DataQualityIcon, ComponentIcons } from '@/components/quality'
 import {
   Dialog,
   DialogContent,
@@ -27,7 +31,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { ChevronUp, ChevronDown, ChevronsUpDown, Plus, Filter, ChevronLeft, ChevronRight, StickyNote, Info } from 'lucide-react'
+import { ChevronUp, ChevronDown, ChevronsUpDown, Plus, Filter, ChevronLeft, ChevronRight, StickyNote, Info, X } from 'lucide-react'
 
 type ScreenerRow = {
   ticker: string
@@ -48,6 +52,8 @@ type ScreenerRow = {
   ev_ebit: number | null
   debt_equity: number | null
   has_fundamentals: boolean
+  // Fields needed for quality scoring
+  fundamentals: StockFundamentals | null
 }
 
 type SortKey = string
@@ -105,8 +111,13 @@ function Th({
 
 export default function Screener() {
   const [rows, setRows] = useState<ScreenerRow[]>([])
+  const [analystMap, setAnalystMap] = useState<Map<string, AnalystData>>(new Map())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  const [searchParams, setSearchParams] = useSearchParams()
+  const minScoreParam = searchParams.get('minScore')
+  const minScore = minScoreParam != null ? parseFloat(minScoreParam) : null
 
   // Filters
   const [search, setSearch] = useState('')
@@ -119,9 +130,9 @@ export default function Screener() {
     roicMin: '', roicMax: '',
   })
 
-  // Sorting
-  const [sortKey, setSortKey] = useState('ticker')
-  const [sortDir, setSortDir] = useState<SortDir>('asc')
+  // Sorting — default to Quality Score descending (matches default QUALITY tab)
+  const [sortKey, setSortKey] = useState('qualityScore')
+  const [sortDir, setSortDir] = useState<SortDir>('desc')
 
   // Pagination
   const [page, setPage] = useState(0)
@@ -157,10 +168,15 @@ export default function Screener() {
     const { data: priceData } = await supabase.from('stock_prices').select('ticker, price')
     const { data: fundData } = await supabase.from('stock_fundamentals').select('*')
     const { data: profileData } = await supabase.from('stock_profiles').select('ticker, company_name, sector, currency')
+    const { data: analystRows } = await supabase
+      .from('analyst_data')
+      .select('ticker, target_mean, rec_strong_buy, rec_buy, rec_hold, rec_underperform, rec_sell')
 
     const priceMap = new Map((priceData ?? []).map((r) => [r.ticker, r.price]))
     const fundMap = new Map((fundData ?? []).map((r) => [r.ticker, r]))
     const profileMap = new Map((profileData ?? []).map((r) => [r.ticker, r]))
+
+    setAnalystMap(new Map((analystRows ?? []).map((a) => [a.ticker, a as AnalystData])))
 
     const result: ScreenerRow[] = tickers.map((t) => {
       const f = fundMap.get(t.ticker)
@@ -184,6 +200,22 @@ export default function Screener() {
         ev_ebit: f?.ev_ebit ?? null,
         debt_equity: f?.debt_equity ?? null,
         has_fundamentals: !!f,
+        fundamentals: f
+          ? {
+              eps: f.eps ?? null,
+              book_value_per_share: f.book_value_per_share ?? null,
+              dps: f.dps ?? null,
+              ev_ebitda: f.ev_ebitda ?? null,
+              dividend_yield: f.dividend_yield ?? null,
+              payout_avg: f.payout_avg ?? null,
+              revenue_growth_yoy: f.revenue_growth_yoy ?? null,
+              earnings_growth_5y: f.earnings_growth_5y ?? null,
+              net_debt_ebit: f.net_debt_ebit ?? null,
+              roe: f.roe ?? null,
+              free_cash_flow: f.free_cash_flow ?? null,
+              shares_outstanding: f.shares_outstanding ?? null,
+            }
+          : null,
       }
     })
 
@@ -209,23 +241,43 @@ export default function Screener() {
   }
 
   const enriched = useMemo(() => {
-    return rows.map((r) => ({
-      ...r,
-      teto8: calcTeto8(r.dividend_yield, r.price),
-      teto6: calcTeto6(r.dividend_yield, r.price),
-      signal: calcBazinSignal(r.dividend_yield, r.price),
-      intrinsic: calcIntrinsicValue(r.eps, r.book_value_per_share),
-      fair: calcFairValue(r.eps, r.earnings_growth_5y),
-      upside: calcIntrinsicUpside(calcIntrinsicValue(r.eps, r.book_value_per_share), r.price),
-      margin: calcMarginOfSafety(calcFairValue(r.eps, r.earnings_growth_5y), r.price),
-      dyPct: r.dividend_yield != null ? r.dividend_yield * 100 : null,
-    }))
-  }, [rows])
+    // Sector EV/EBITDA peer set for relative valuation
+    const peerMap = buildSectorPeerMap(rows.map((r) => ({ sector: r.sector, ev_ebitda: r.fundamentals?.ev_ebitda ?? null })))
+
+    return rows.map((r) => {
+      const peers = r.sector ? (peerMap.get(r.sector) ?? []) : []
+      const comp: QualityComputation | null = computeQuality(
+        r.fundamentals,
+        r.price,
+        analystMap.get(r.ticker) ?? null,
+        r.sector,
+        peers,
+      )
+      return {
+        ...r,
+        teto8: calcTeto8(r.dividend_yield, r.price),
+        teto6: calcTeto6(r.dividend_yield, r.price),
+        signal: calcBazinSignal(r.dividend_yield, r.price),
+        intrinsic: calcIntrinsicValue(r.eps, r.book_value_per_share),
+        fair: calcFairValue(r.eps, r.earnings_growth_5y),
+        upside: calcIntrinsicUpside(calcIntrinsicValue(r.eps, r.book_value_per_share), r.price),
+        margin: calcMarginOfSafety(calcFairValue(r.eps, r.earnings_growth_5y), r.price),
+        dyPct: r.dividend_yield != null ? r.dividend_yield * 100 : null,
+        // Quality scoring
+        comp,
+        qualityScore: comp ? comp.quality.score : null,
+        profileLabel: comp ? comp.profileResult.label : null,
+        dataQualityScore: comp ? comp.dataQuality.score : null,
+      }
+    })
+  }, [rows, analystMap])
 
   const filtered = useMemo(() => {
     return enriched.filter((r) => {
       const q = search.toLowerCase()
       if (q && !r.ticker.toLowerCase().includes(q) && !(r.company_name ?? '').toLowerCase().includes(q)) return false
+
+      if (minScore != null && (r.qualityScore == null || r.qualityScore < minScore)) return false
 
       if ((filters.peMin || filters.peMax) && !numFilter(r.pe, filters.peMin, filters.peMax)) return false
       if ((filters.pbMin || filters.pbMax) && !numFilter(r.pb, filters.pbMin, filters.pbMax)) return false
@@ -235,7 +287,7 @@ export default function Screener() {
 
       return true
     })
-  }, [enriched, search, filters])
+  }, [enriched, search, filters, minScore])
 
   const sorted = useMemo(() => {
     const arr = [...filtered]
@@ -385,11 +437,66 @@ export default function Screener() {
         </div>
       )}
 
-      <Tabs defaultValue="bazin">
+      {minScore != null && (
+        <div className="flex items-center gap-2">
+          <Badge variant="secondary" className="gap-1">
+            Quality Score ≥ {minScore}
+            <button onClick={() => setSearchParams({}, { replace: true })} className="ml-1 hover:text-foreground">
+              <X className="h-3 w-3" />
+            </button>
+          </Badge>
+        </div>
+      )}
+
+      <Tabs defaultValue="quality">
         <TabsList>
+          <TabsTrigger value="quality">QUALITY</TabsTrigger>
           <TabsTrigger value="bazin">BAZIN / 3/8</TabsTrigger>
           <TabsTrigger value="graham">GRAHAM</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="quality">
+          <div className="rounded-lg border overflow-auto">
+            <table className="w-full text-sm">
+              <thead className="border-b bg-muted/40">
+                <tr>
+                  <Th col="ticker" label="Ticker" {...sp} />
+                  <Th col="company_name" label="Empresa" {...sp} />
+                  <Th col="qualityScore" label="Quality Score" {...sp} tooltip="Score composto (0-120) que agrega Bazin, Graham, DCF, Relativo, DDM e Insights de Analistas, ponderados pelo perfil da empresa e pela qualidade dos dados. É um filtro de descoberta, não recomendação de investimento." />
+                  <Th col="profileLabel" label="Perfil" {...sp} />
+                  <Th col="dataQualityScore" label="Qualidade Dados" {...sp} />
+                  <th className="px-3 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Componentes</th>
+                  <Th col="sector" label="Setor" {...sp} />
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {pageRows.map((r) => (
+                  <tr key={r.ticker} className="hover:bg-muted/30 transition-colors">
+                    <td className="px-3 py-2 font-medium">
+                      <span className="inline-flex items-center gap-1">
+                        <Link to={`/analysis/${r.ticker}`} className="text-primary hover:underline">{r.ticker}</Link>
+                        {notedTickers.has(r.ticker) && (
+                          <Link to={`/analysis/${r.ticker}`} title="Tem nota">
+                            <StickyNote className="h-3 w-3 text-amber-500" />
+                          </Link>
+                        )}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-muted-foreground max-w-[180px] truncate">{r.company_name ?? '-'}</td>
+                    <td className="px-3 py-2">{r.comp ? <QualityScoreBadge result={r.comp.quality} /> : '-'}</td>
+                    <td className="px-3 py-2">{r.comp ? <ProfileBadge label={r.comp.profileResult.label} description={r.comp.profileResult.description} /> : '-'}</td>
+                    <td className="px-3 py-2">{r.comp ? <DataQualityIcon result={r.comp.dataQuality} /> : '-'}</td>
+                    <td className="px-3 py-2">{r.comp ? <ComponentIcons components={r.comp.quality.components} /> : '-'}</td>
+                    <td className="px-3 py-2 text-muted-foreground max-w-[140px] truncate">{r.sector ?? '-'}</td>
+                  </tr>
+                ))}
+                {pageRows.length === 0 && (
+                  <tr><td colSpan={7} className="px-3 py-8 text-center text-muted-foreground">Nenhum resultado encontrado.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </TabsContent>
 
         <TabsContent value="bazin">
           <div className="rounded-lg border overflow-auto">

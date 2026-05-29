@@ -20,8 +20,12 @@ import {
   calculateDCF,
   calcEVEBITDARelative,
   calcDDM,
+  detectCompanyProfile,
+  calcDataQuality,
+  calcQualityScore,
 } from '@/lib/calculations'
-import type { DCFResult, EVEBITDARelativeResult, DDMResult } from '@/lib/calculations'
+import type { DCFResult, EVEBITDARelativeResult, DDMResult, ComponentScore } from '@/lib/calculations'
+import { StarRating, ProfileBadge, DataQualityBadge, qualityColorClasses } from '@/components/quality'
 import { useCurrency } from '@/lib/currency'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -689,6 +693,26 @@ export default function Analysis() {
   const [sectorPeersLoading, setSectorPeersLoading] = useState(false)
   const [keRate, setKeRate] = useState(0.10)
 
+  // Valuation tab (controlled so Quality Score components can jump to a tab)
+  const [valuationTab, setValuationTab] = useState('graham')
+  const valuationRef = useRef<HTMLDivElement>(null)
+  const analystRef = useRef<HTMLDivElement>(null)
+
+  function focusComponent(name: string) {
+    const tabFor: Record<string, string> = {
+      Bazin: 'bazin', Graham: 'graham', DCF: 'dcf', Relativo: 'relativo', DDM: 'relativo',
+    }
+    if (name === 'Analyst') {
+      analystRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      return
+    }
+    const tab = tabFor[name]
+    if (tab) {
+      setValuationTab(tab)
+      valuationRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }
+
   const [disclaimerCollapsed, setDisclaimerCollapsed] = useState(() => {
     try { return localStorage.getItem('disclaimer_graham_collapsed') === 'true' } catch { return false }
   })
@@ -743,6 +767,25 @@ export default function Analysis() {
     () => calcDDM(fundamentals?.dps, fundamentals?.earnings_growth_5y, keRate, price),
     [fundamentals?.dps, fundamentals?.earnings_growth_5y, keRate, price],
   )
+
+  // Composite Quality Score — reflects the page's reactive DCF/EV/DDM inputs
+  const qualityComputation = useMemo(() => {
+    if (!fundamentals || price == null || price <= 0) return null
+    const profileResult = detectCompanyProfile(fundamentals)
+    const peerCount = sectorPeers.filter((v) => v > 0).length
+    const dataQuality = calcDataQuality(fundamentals, analystData, peerCount, !!profile?.sector)
+    const quality = calcQualityScore({
+      fundamentals,
+      price,
+      analystData,
+      dcfResult,
+      evEbitdaRelative: evResult,
+      ddmResult,
+      dataQuality,
+      profile: profileResult.profile,
+    })
+    return { profileResult, dataQuality, quality }
+  }, [fundamentals, price, analystData, dcfResult, evResult, ddmResult, sectorPeers, profile?.sector])
 
   const dcfChartData = useMemo(() => {
     if (!dcfResult) return []
@@ -969,6 +1012,38 @@ export default function Analysis() {
   const hasFcf = f?.free_cash_flow != null && f?.shares_outstanding != null
   const fcfPositive = hasFcf && f!.free_cash_flow! > 0
 
+  // Quality Score component breakdown helpers (derive human-readable detail per method)
+  const qc = qualityComputation
+  function componentDetail(c: ComponentScore): string {
+    if (!c.applicable) return 'N/A'
+    switch (c.name) {
+      case 'Bazin': return signal ?? '—'
+      case 'Graham': return marginofSafety != null ? `MS ${fmtPct(marginofSafety)}` : '—'
+      case 'DCF': {
+        if (!dcfResult || price == null) return '—'
+        const u = calcIntrinsicUpside(dcfResult.intrinsicPerShare, price)
+        return u != null ? `Upside ${fmtPct(u)}` : '—'
+      }
+      case 'Relativo': return evResult ? (evResult.signal === 'CHEAP' ? 'BARATO' : evResult.signal === 'EXPENSIVE' ? 'CARO' : 'JUSTO') : '—'
+      case 'DDM': return ddmResult ? ddmResult.signal : '—'
+      case 'Analyst': {
+        if (!analystData) return '—'
+        const sb = analystData.rec_strong_buy ?? 0, b = analystData.rec_buy ?? 0
+        const h = analystData.rec_hold ?? 0, u = analystData.rec_underperform ?? 0, s = analystData.rec_sell ?? 0
+        const total = sb + b + h + u + s
+        if (total === 0) return '—'
+        if (sb + b > h + u + s) return 'Compra'
+        if (s + u > sb + b) return 'Venda'
+        return 'Neutro'
+      }
+      default: return '—'
+    }
+  }
+  function signalDot(sig: ComponentScore['signal']) {
+    const color = sig === 'POSITIVE' ? 'bg-green-500' : sig === 'NEGATIVE' ? 'bg-red-500' : sig === 'NEUTRAL' ? 'bg-yellow-500' : 'bg-muted-foreground/30'
+    return <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${color}`} />
+  }
+
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center gap-3">
@@ -1018,7 +1093,63 @@ export default function Analysis() {
         </Card>
       )}
 
+      {/* Quality Score */}
+      {qc && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2 flex-wrap">
+                <CardTitle className="text-base">Quality Score</CardTitle>
+                <span title={`Perfil: ${qc.profileResult.label} — ${qc.profileResult.description}. Pesos dos métodos ajustados a este perfil.`}>
+                  <ProfileBadge label={`Perfil: ${qc.profileResult.label}`} description={qc.profileResult.description} />
+                </span>
+              </div>
+              <DataQualityBadge result={qc.dataQuality} />
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-[200px_1fr] gap-6">
+              <div className="flex flex-col items-center justify-center text-center rounded-lg border p-4">
+                <div className="text-5xl font-bold leading-none">{Math.round(qc.quality.score)}</div>
+                <div className="text-xs text-muted-foreground mt-1 mb-2">de 120</div>
+                <StarRating stars={qc.quality.stars} size={18} />
+                <span className={`mt-2 inline-flex items-center rounded-full border px-3 py-0.5 text-sm font-semibold ${qualityColorClasses(qc.quality.color)}`}>
+                  {qc.quality.category}
+                </span>
+              </div>
+              <div className="space-y-0.5">
+                {qc.quality.components.map((c) => {
+                  const isNA = !c.applicable || c.score == null
+                  return (
+                    <button
+                      key={c.name}
+                      onClick={() => focusComponent(c.name)}
+                      className={`w-full flex items-center justify-between gap-3 py-1.5 px-2 rounded text-left text-sm hover:bg-muted/50 transition-colors ${isNA ? 'opacity-60' : ''}`}
+                      title={!c.applicable ? `Não aplicável para empresas de ${qc.profileResult.label}` : 'Clique para ver detalhes abaixo'}
+                    >
+                      <span className="flex items-center gap-2 min-w-0">
+                        {signalDot(c.signal)}
+                        <span className="font-medium w-20 shrink-0">{c.name}</span>
+                        <span className="text-muted-foreground truncate">{componentDetail(c)}</span>
+                      </span>
+                      <span className="text-muted-foreground tabular-nums shrink-0">{c.score != null ? Math.round(c.score) : '—'}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+            {qc.quality.warning && (
+              <div className="mt-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 text-amber-900 px-4 py-2.5 text-xs">
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>{qc.quality.warning}</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Analyst Insights */}
+      <div ref={analystRef} className="scroll-mt-20" />
       {analystData && (analystData.target_low != null || (analystData.rec_history && analystData.rec_history.length > 0)) && (
         <Card>
           <CardHeader>
@@ -1097,7 +1228,8 @@ export default function Analysis() {
       )}
 
       {/* Valuation Tabs: Graham | Bazin | DCF | Relativo */}
-      <Tabs defaultValue="graham">
+      <div ref={valuationRef} className="scroll-mt-20" />
+      <Tabs value={valuationTab} onValueChange={setValuationTab}>
         <TabsList className="mb-4">
           <TabsTrigger value="graham">Graham</TabsTrigger>
           <TabsTrigger value="bazin">Bazin</TabsTrigger>
