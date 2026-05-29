@@ -325,6 +325,85 @@ export function calculateDCF(inputs: DCFInputs): DCFResult | null {
   }
 }
 
+// ---------------------------------------------------------------------------
+// EV/EBITDA RELATIVE VALUATION
+// ---------------------------------------------------------------------------
+
+export type EVEBITDARelativeResult = {
+  tickerValue: number
+  sectorMedian: number
+  sectorMin: number
+  sectorMax: number
+  sectorCount: number
+  premium: number   // decimal: (tickerValue / sectorMedian) - 1
+  signal: 'CHEAP' | 'FAIR' | 'EXPENSIVE'
+}
+
+/**
+ * EV/EBITDA relative valuation vs sector peers.
+ * Returns null when tickerValue is invalid or fewer than 3 peer values are provided.
+ */
+export function calcEVEBITDARelative(
+  tickerEVEBITDA: number | null | undefined,
+  peerValues: number[],
+): EVEBITDARelativeResult | null {
+  if (!isValid(tickerEVEBITDA)) return null
+  const valid = peerValues.filter((v) => isFinite(v) && v > 0)
+  if (valid.length < 3) return null
+  const sorted = [...valid].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  const sectorMedian = sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid]
+  const premium = tickerEVEBITDA! / sectorMedian - 1
+  const signal: EVEBITDARelativeResult['signal'] =
+    premium < -0.20 ? 'CHEAP' : premium > 0.20 ? 'EXPENSIVE' : 'FAIR'
+  return {
+    tickerValue: tickerEVEBITDA!,
+    sectorMedian,
+    sectorMin: sorted[0],
+    sectorMax: sorted[sorted.length - 1],
+    sectorCount: sorted.length,
+    premium,
+    signal,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// DDM — Dividend Discount Model (Gordon Growth Model)
+// ---------------------------------------------------------------------------
+
+export type DDMResult = {
+  fairPrice: number
+  dps: number
+  ke: number
+  g: number
+  upside: number  // decimal: (fairPrice / currentPrice) - 1
+  signal: 'COMPRA' | 'NEUTRO' | 'NÃO COMPRA'
+}
+
+/**
+ * Gordon Growth DDM: fairPrice = DPS / (ke - g).
+ * g is capped at min(earningsGrowth5y ?? 0, 0.25).
+ * Returns null when DPS is null/≤0, ke ≤ g, or currentPrice ≤ 0.
+ */
+export function calcDDM(
+  dps: number | null | undefined,
+  earningsGrowth5y: number | null | undefined,
+  ke: number,
+  currentPrice: number | null | undefined,
+): DDMResult | null {
+  if (!isValid(dps, currentPrice)) return null
+  if (dps! <= 0 || currentPrice! <= 0) return null
+  const g = Math.min(earningsGrowth5y != null ? Math.max(earningsGrowth5y, 0) : 0, 0.25)
+  if (ke <= g) return null
+  const fairPrice = dps! / (ke - g)
+  const upside = fairPrice / currentPrice! - 1
+  const signal: DDMResult['signal'] =
+    upside > 0.15 ? 'COMPRA' : upside < -0.15 ? 'NÃO COMPRA' : 'NEUTRO'
+  return { fairPrice, dps: dps!, ke, g, upside, signal }
+}
+
 /**
  * Compute per-ticker annual/monthly dividend estimates from portfolio positions.
  * All monetary values are in each ticker's native currency; callers convert for display.
