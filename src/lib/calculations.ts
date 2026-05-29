@@ -440,3 +440,344 @@ export function calculateMonthlyDividends(
     }
   })
 }
+
+// ---------------------------------------------------------------------------
+// SHARED DATA SHAPES (for profile / quality scoring)
+// ---------------------------------------------------------------------------
+
+/** Subset of stock_fundamentals fields consumed by profiling & quality scoring. */
+export type StockFundamentals = {
+  eps: number | null
+  book_value_per_share: number | null
+  dps: number | null
+  ev_ebitda: number | null
+  dividend_yield: number | null
+  payout_avg: number | null
+  revenue_growth_yoy: number | null
+  earnings_growth_5y: number | null
+  net_debt_ebit: number | null
+  roe: number | null
+  free_cash_flow: number | null
+  shares_outstanding: number | null
+}
+
+/** Subset of analyst_data fields consumed by quality scoring. */
+export type AnalystData = {
+  target_mean: number | null
+  rec_strong_buy: number | null
+  rec_buy: number | null
+  rec_hold: number | null
+  rec_underperform: number | null
+  rec_sell: number | null
+}
+
+// ---------------------------------------------------------------------------
+// COMPANY PROFILE DETECTION
+// ---------------------------------------------------------------------------
+
+export type CompanyProfile =
+  | 'DIVIDEND_PAYER'
+  | 'HIGH_YIELD'
+  | 'GROWTH'
+  | 'MATURE'
+  | 'DISTRESSED'
+  | 'UNCLASSIFIED'
+
+export interface ProfileResult {
+  profile: CompanyProfile
+  label: string
+  description: string
+  paysDividend: boolean
+}
+
+const PROFILE_META: Record<CompanyProfile, { label: string; description: string }> = {
+  DIVIDEND_PAYER: { label: 'Pagadora de Dividendos', description: 'DY moderado, payout sustentável' },
+  HIGH_YIELD:     { label: 'Alto Yield',             description: 'Foco em distribuição (Bazin/Aposentadoria)' },
+  GROWTH:         { label: 'Crescimento',            description: 'Reinveste lucros, baixo dividendo' },
+  MATURE:         { label: 'Madura',                 description: 'Estável, crescimento limitado' },
+  DISTRESSED:     { label: 'Atenção',                description: 'Resultado negativo ou alto endividamento' },
+  UNCLASSIFIED:   { label: 'Não Classificada',       description: 'Dados insuficientes para classificação' },
+}
+
+/**
+ * Detect a company profile from fundamentals. First match wins, evaluated in order:
+ * DISTRESSED → HIGH_YIELD → DIVIDEND_PAYER → GROWTH → MATURE → UNCLASSIFIED.
+ */
+export function detectCompanyProfile(fundamentals: {
+  dividend_yield: number | null
+  payout_avg: number | null
+  revenue_growth_yoy: number | null
+  eps: number | null
+  net_debt_ebit: number | null
+}): ProfileResult {
+  const { dividend_yield: dy, payout_avg: payout, revenue_growth_yoy: revG, eps, net_debt_ebit: nde } = fundamentals
+  const paysDividend = dy != null && dy > 0.01
+
+  let profile: CompanyProfile
+  if ((eps != null && eps <= 0) || (nde != null && nde > 5)) {
+    profile = 'DISTRESSED'
+  } else if (dy != null && dy >= 0.06) {
+    profile = 'HIGH_YIELD'
+  } else if (dy != null && dy >= 0.02 && payout != null && payout >= 0.20 && payout <= 0.80) {
+    profile = 'DIVIDEND_PAYER'
+  } else if (dy != null && dy < 0.02 && revG != null && revG >= 0.15) {
+    profile = 'GROWTH'
+  } else if (dy != null && dy < 0.02 && revG != null && revG < 0.05) {
+    profile = 'MATURE'
+  } else {
+    profile = 'UNCLASSIFIED'
+  }
+
+  return { profile, label: PROFILE_META[profile].label, description: PROFILE_META[profile].description, paysDividend }
+}
+
+// ---------------------------------------------------------------------------
+// DATA QUALITY SCORE
+// ---------------------------------------------------------------------------
+
+export interface DataQualityResult {
+  score: number      // 0-100
+  level: 'HIGH' | 'MEDIUM' | 'LOW'
+  missingFields: string[]
+}
+
+/**
+ * Data completeness score (10 fields × 10 points = 0-100).
+ * missingFields lists the user-facing names of fields that scored 0.
+ */
+export function calcDataQuality(
+  fundamentals: StockFundamentals,
+  analystData: AnalystData | null,
+  sectorPeerCount: number,
+  hasSector: boolean,
+): DataQualityResult {
+  const checks: { name: string; ok: boolean }[] = [
+    { name: 'LPA (EPS)',          ok: fundamentals.eps != null && fundamentals.eps > 0 },
+    { name: 'VPA',                ok: fundamentals.book_value_per_share != null },
+    { name: 'Crescimento 5 anos', ok: fundamentals.earnings_growth_5y != null },
+    { name: 'Fluxo de Caixa Livre', ok: fundamentals.free_cash_flow != null && fundamentals.free_cash_flow > 0 },
+    { name: 'EV/EBITDA',          ok: fundamentals.ev_ebitda != null && fundamentals.ev_ebitda > 0 },
+    { name: 'Dividend Yield',     ok: fundamentals.dividend_yield != null },
+    { name: 'ROE',                ok: fundamentals.roe != null },
+    { name: 'Dados de Analistas', ok: analystData != null && analystData.target_mean != null },
+    { name: 'Setor',              ok: hasSector },
+    { name: 'Pares do Setor (≥5)', ok: sectorPeerCount >= 5 },
+  ]
+  const score = checks.reduce((s, c) => s + (c.ok ? 10 : 0), 0)
+  const level: DataQualityResult['level'] = score >= 80 ? 'HIGH' : score >= 50 ? 'MEDIUM' : 'LOW'
+  const missingFields = checks.filter((c) => !c.ok).map((c) => c.name)
+  return { score, level, missingFields }
+}
+
+// ---------------------------------------------------------------------------
+// QUALITY SCORE (composite)
+// ---------------------------------------------------------------------------
+
+export interface ComponentScore {
+  name: string
+  score: number | null
+  weight: number
+  applicable: boolean
+  signal: 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE' | 'N/A'
+}
+
+export interface QualityScoreResult {
+  score: number
+  category: 'EXCELENTE' | 'BOM' | 'NEUTRO' | 'CAUTELA' | 'EVITAR'
+  stars: 1 | 2 | 3 | 4 | 5
+  color: 'green-dark' | 'green' | 'yellow' | 'orange' | 'red'
+  components: ComponentScore[]
+  consistencyMultiplier: number
+  dataQualityMultiplier: number
+  profile: CompanyProfile
+  warning: string | null
+}
+
+type ComponentKey = 'bazin' | 'graham' | 'dcf' | 'relative' | 'ddm' | 'analyst'
+
+const QUALITY_WEIGHTS: Record<CompanyProfile, Record<ComponentKey, number>> = {
+  DIVIDEND_PAYER: { bazin: 0.20, graham: 0.20, dcf: 0.20, relative: 0.15, ddm: 0.15, analyst: 0.10 },
+  HIGH_YIELD:     { bazin: 0.25, graham: 0.15, dcf: 0.10, relative: 0.15, ddm: 0.25, analyst: 0.10 },
+  GROWTH:         { bazin: 0.00, graham: 0.00, dcf: 0.40, relative: 0.25, ddm: 0.00, analyst: 0.35 },
+  MATURE:         { bazin: 0.10, graham: 0.20, dcf: 0.20, relative: 0.20, ddm: 0.20, analyst: 0.10 },
+  DISTRESSED:     { bazin: 0.00, graham: 0.00, dcf: 0.00, relative: 0.30, ddm: 0.00, analyst: 0.20 },
+  // equal weights across applicable components
+  UNCLASSIFIED:   { bazin: 1, graham: 1, dcf: 1, relative: 1, ddm: 1, analyst: 1 },
+}
+
+const COMPONENT_LABELS: Record<ComponentKey, string> = {
+  bazin: 'Bazin', graham: 'Graham', dcf: 'DCF', relative: 'Relativo', ddm: 'DDM', analyst: 'Analyst',
+}
+
+function componentSignal(applicable: boolean, score: number | null): ComponentScore['signal'] {
+  if (!applicable || score == null) return 'N/A'
+  if (score >= 60) return 'POSITIVE'
+  if (score < 40) return 'NEGATIVE'
+  return 'NEUTRAL'
+}
+
+const QUALITY_CATEGORY: Array<{
+  min: number
+  category: QualityScoreResult['category']
+  stars: QualityScoreResult['stars']
+  color: QualityScoreResult['color']
+}> = [
+  { min: 90, category: 'EXCELENTE', stars: 5, color: 'green-dark' },
+  { min: 70, category: 'BOM',       stars: 4, color: 'green' },
+  { min: 50, category: 'NEUTRO',    stars: 3, color: 'yellow' },
+  { min: 30, category: 'CAUTELA',   stars: 2, color: 'orange' },
+  { min: 0,  category: 'EVITAR',    stars: 1, color: 'red' },
+]
+
+function categorize(score: number) {
+  return QUALITY_CATEGORY.find((c) => score >= c.min) ?? QUALITY_CATEGORY[QUALITY_CATEGORY.length - 1]
+}
+
+/**
+ * Composite quality score (0-120) aggregating Bazin, Graham, DCF, EV/EBITDA relative,
+ * DDM and analyst signals. Weights adjust by company profile; methods structurally
+ * irrelevant for a profile are excluded. Final score is scaled by a consistency
+ * multiplier (method agreement) and a data-quality multiplier.
+ */
+export function calcQualityScore(input: {
+  fundamentals: StockFundamentals
+  price: number
+  analystData: AnalystData | null
+  dcfResult: DCFResult | null
+  evEbitdaRelative: EVEBITDARelativeResult | null
+  ddmResult: DDMResult | null
+  dataQuality: DataQualityResult
+  profile: CompanyProfile
+}): QualityScoreResult {
+  const { fundamentals: f, price, analystData, dcfResult, evEbitdaRelative, ddmResult, dataQuality, profile } = input
+  const weights = QUALITY_WEIGHTS[profile]
+  const paysDividend = f.dividend_yield != null && f.dividend_yield > 0.01
+
+  // --- bazin ---
+  const bazinApplicable = profile !== 'GROWTH' && profile !== 'MATURE'
+  let bazinScore: number | null = null
+  if (bazinApplicable) {
+    const sig = calcBazinSignal(f.dividend_yield, price)
+    bazinScore = sig === 'COMPRA' ? 100 : sig === 'NÃO COMPRA' ? 0 : null
+  }
+
+  // --- graham ---
+  const grahamApplicable = profile !== 'GROWTH' && profile !== 'DISTRESSED'
+  let grahamScore: number | null = null
+  if (grahamApplicable) {
+    const fair = calcFairValue(f.eps, f.earnings_growth_5y)
+    const mos = calcMarginOfSafety(fair, price)
+    grahamScore = mos != null ? Math.max(0, Math.min(mos * 200, 100)) : null
+  }
+
+  // --- dcf ---
+  const dcfApplicable = profile !== 'DISTRESSED'
+  let dcfScore: number | null = null
+  if (dcfApplicable && dcfResult != null) {
+    const upside = calcIntrinsicUpside(dcfResult.intrinsicPerShare, price)
+    dcfScore = upside != null ? Math.max(0, Math.min(upside * 100, 100)) : null
+  }
+
+  // --- relative (EV/EBITDA vs sector) ---
+  const relativeApplicable = true
+  let relativeScore: number | null = null
+  if (evEbitdaRelative != null) {
+    relativeScore = evEbitdaRelative.signal === 'CHEAP' ? 100 : evEbitdaRelative.signal === 'FAIR' ? 50 : 0
+  }
+
+  // --- ddm ---
+  const ddmApplicable = profile !== 'GROWTH' && profile !== 'DISTRESSED' && paysDividend
+  let ddmScore: number | null = null
+  if (ddmApplicable && ddmResult != null) {
+    ddmScore = ddmResult.signal === 'COMPRA' ? 100 : ddmResult.signal === 'NEUTRO' ? 50 : 0
+  }
+
+  // --- analyst ---
+  const analystApplicable = true
+  let analystScore: number | null = null
+  if (analystData != null) {
+    const sb = analystData.rec_strong_buy ?? 0
+    const b = analystData.rec_buy ?? 0
+    const h = analystData.rec_hold ?? 0
+    const u = analystData.rec_underperform ?? 0
+    const s = analystData.rec_sell ?? 0
+    const total = sb + b + h + u + s
+    if (total > 0) {
+      analystScore = (sb * 100 + b * 75 + h * 50 + u * 25 + s * 0) / total
+    }
+  }
+
+  const raw: Array<{ key: ComponentKey; score: number | null; applicable: boolean }> = [
+    { key: 'bazin',    score: bazinScore,    applicable: bazinApplicable },
+    { key: 'graham',   score: grahamScore,   applicable: grahamApplicable },
+    { key: 'dcf',      score: dcfScore,      applicable: dcfApplicable },
+    { key: 'relative', score: relativeScore, applicable: relativeApplicable },
+    { key: 'ddm',      score: ddmScore,      applicable: ddmApplicable },
+    { key: 'analyst',  score: analystScore,  applicable: analystApplicable },
+  ]
+
+  const components: ComponentScore[] = raw.map((c) => ({
+    name: COMPONENT_LABELS[c.key],
+    score: c.applicable ? c.score : null,
+    weight: weights[c.key],
+    applicable: c.applicable,
+    signal: componentSignal(c.applicable, c.applicable ? c.score : null),
+  }))
+
+  const applicableComponents = components.filter((c) => c.applicable && c.score != null)
+  const totalWeight = applicableComponents.reduce((s, c) => s + c.weight, 0)
+  const dataQualityMultiplier = dataQuality.score / 100
+
+  // Insufficient components → score 0
+  if (applicableComponents.length < 2 || totalWeight === 0) {
+    const cat = categorize(0)
+    return {
+      score: 0,
+      category: cat.category,
+      stars: cat.stars,
+      color: cat.color,
+      components,
+      consistencyMultiplier: 1,
+      dataQualityMultiplier,
+      profile,
+      warning: 'Componentes insuficientes para uma avaliação confiável.',
+    }
+  }
+
+  const baseScore = applicableComponents.reduce(
+    (s, c) => s + (c.score as number) * (c.weight / totalWeight),
+    0,
+  )
+
+  // Consistency multiplier
+  const positiveComponents = applicableComponents.filter((c) => (c.score as number) > 60)
+  const agreementRatio = positiveComponents.length / applicableComponents.length
+  const consistencyMultiplier = agreementRatio > 0.66 ? 1.2 : agreementRatio > 0.33 ? 1.0 : 0.8
+
+  const finalScore = Math.min(120, baseScore * consistencyMultiplier * dataQualityMultiplier)
+  const cat = categorize(finalScore)
+
+  // Warning logic (first applicable message wins)
+  let warning: string | null = null
+  if (profile === 'DISTRESSED') {
+    warning = 'Empresa com indicadores de risco. Score baseado em poucos métodos.'
+  } else if (applicableComponents.length < 3) {
+    warning = `Apenas ${applicableComponents.length} métodos aplicáveis para este perfil.`
+  } else if (dataQuality.level === 'LOW') {
+    warning = 'Qualidade dos dados insuficiente. Score com baixa confiabilidade.'
+  } else if (consistencyMultiplier === 0.8) {
+    warning = 'Métodos divergem nesta avaliação. Revise componentes individualmente.'
+  }
+
+  return {
+    score: finalScore,
+    category: cat.category,
+    stars: cat.stars,
+    color: cat.color,
+    components,
+    consistencyMultiplier,
+    dataQualityMultiplier,
+    profile,
+    warning,
+  }
+}
